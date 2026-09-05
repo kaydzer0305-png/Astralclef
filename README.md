@@ -10,40 +10,32 @@ Win condition: complete **FTB Quests Chapter 6 — Astral Singularity**.
 
 | Phase | Focus | Status |
 |-------|--------|--------|
-| Ch0.5–1 | Getting started (early Create + Andesite) | **In progress** — Task API + Create loop |
-| Moon | Lunar progression | Stub only |
-| Mars | Martian progression | Stub only |
-| Mercury | Mercurial progression | Stub only |
-| Singularity | Astral Singularity (endgame win) | Stub only |
+| **Ch0.5–1** | Getting started (early Create + Astral basics) | **Stubbed** — Task API + ship-order loop |
+| Moon | Lunar progression | Stub |
+| Mars | Martian progression | Stub |
+| Mercury | Mercurial progression | Stub |
+| Singularity | Astral Singularity (endgame win) | Stub |
 
-## Ch0.5–1 task loop
+### Ch0.5–1 Create loop (ship order)
 
-Minimal Altoclef-style API under `com.ezquest.astralclef.task`:
+Stubbed in `Ch01GettingStartedTask` via `TaskRunner` (`/astralclef ch01`):
 
-- `Task` — `onStart` / `onTick` (may return a subtask) / `onStop` / `isEqual`
-- `TaskRunner` — holds the active user task and ticks it
+1. **Ch0.5 unlock** — Crafting/Hephaestus or copper tools → Furnace → Fe/Sn/Cu (Pickadze) → Essential Materials (*quests31*)
+2. **Alloy / Casing** — Bronze (Cu+Sn, not Brass) → Andesite Compound smelt (*quests26*) → Alloy stockpile (*quests5*) → Andesite Casing
+3. **Mixer loop** — Hand Crank / shafts / water wheel → Millstone / Press / Mixer+Basin → sheets, fans, drill/saw → press-dust
+4. **Grout gate** — Grout via Mixer (*quests25*) → Chapter 2 unlock
 
-`Ch01GettingStartedTask` drives:
+Astral flags wired as `CreateRecipeKinds` hooks: Compound smelt, Bronze smith, press-dust, Mixer+Basin, Grout.  
+Deferred: trains, ComputerCraft, Astral Signals. FTB SNBT edges unverified.
 
-1. Gather basics  
-2. Andesite alloy path  
-3. Early Create machine placement  
+## Commands
 
-Create recipe kinds (`SEQUENCED_ASSEMBLY`, `MECHANICAL_CRAFTING`, `FILLING`, `BASIN`) are registered as stub handlers in `CreateRecipeKinds`.
-
-### Starting the loop
-
-On mod init, `AstralclefMod` loads `TaskRunner`, `CreateRecipeKinds`, and command hooks.
-
-Invoke the placeholder command hook (from code or a future `/astralclef start`):
-
-```java
-AstralCommands.startCh01();  // runs Ch01GettingStartedTask on TaskRunner
-AstralCommands.status();     // active task debug label
-AstralCommands.stop();       // cancel
-```
-
-Wire a server tick to `TaskRunner.getInstance().tick()` when integrating with gameplay.
+| Command | Action |
+|---------|--------|
+| `/astralclef ch01` | Start Ch0.5–1 via TaskRunner |
+| `/astralclef status` | Show active task |
+| `/astralclef cancel` | Cancel active task |
+| `/astralclef tick` | Manual TaskRunner tick (debug) |
 
 ## Build
 
