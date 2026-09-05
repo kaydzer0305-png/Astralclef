@@ -1,46 +1,70 @@
 package com.ezquest.astralclef.command;
 
+import com.ezquest.astralclef.AstralclefMod;
+import com.ezquest.astralclef.task.Task;
 import com.ezquest.astralclef.task.TaskRunner;
 import com.ezquest.astralclef.tasks.phases.Ch01GettingStartedTask;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.context.CommandContext;
+import net.fabricmc.fabric.api.command.v1.CommandRegistrationCallback;
+import net.minecraft.server.command.CommandManager;
+import net.minecraft.server.command.ServerCommandSource;
+import net.minecraft.text.LiteralText;
 
 /**
- * Astralclef command registration hooks.
- * Full Brigadier {@code /astralclef} wiring can attach to these entry points later;
- * {@link #startCh01()} is the compile-safe placeholder that starts Getting Started.
+ * Registers {@code /astralclef} commands that drive {@link TaskRunner}.
+ * {@code /astralclef ch01} starts the Ch0.5–1 Create loop.
  */
 public final class AstralCommands {
-	private static final Logger LOGGER = LoggerFactory.getLogger("astralclef/commands");
-	private static boolean registered;
-
 	private AstralCommands() {}
 
 	public static void register() {
-		if (registered) {
-			return;
-		}
-		registered = true;
-		// TODO: CommandRegistrationCallback — /astralclef start|stop|status
-		LOGGER.info("Astralclef command hooks ready (use startCh01 / stop / status)");
+		CommandRegistrationCallback.EVENT.register(AstralCommands::registerCommands);
+		AstralclefMod.LOGGER.info("Astralclef commands registered");
 	}
 
-	/** Placeholder command body: start Ch0.5–1 Getting Started on the TaskRunner. */
-	public static void startCh01() {
+	private static void registerCommands(
+			CommandDispatcher<ServerCommandSource> dispatcher,
+			boolean dedicated) {
+		dispatcher.register(
+				CommandManager.literal("astralclef")
+						.then(CommandManager.literal("ch01")
+								.executes(AstralCommands::startCh01))
+						.then(CommandManager.literal("cancel")
+								.executes(AstralCommands::cancel))
+						.then(CommandManager.literal("status")
+								.executes(AstralCommands::status))
+						.then(CommandManager.literal("tick")
+								.executes(AstralCommands::manualTick)));
+	}
+
+	private static int startCh01(CommandContext<ServerCommandSource> ctx) {
 		TaskRunner.getInstance().runUserTask(new Ch01GettingStartedTask());
-		LOGGER.info("Started Ch01GettingStartedTask");
+		ctx.getSource().sendFeedback(
+				new LiteralText("Astralclef: started Ch0.5–1 Getting Started (Create loop)"),
+				true);
+		return 1;
 	}
 
-	public static void stop() {
+	private static int cancel(CommandContext<ServerCommandSource> ctx) {
 		TaskRunner.getInstance().cancel();
+		ctx.getSource().sendFeedback(new LiteralText("Astralclef: task cancelled"), true);
+		return 1;
 	}
 
-	public static String status() {
-		var runner = TaskRunner.getInstance();
-		var task = runner.getUserTask();
-		if (task == null) {
-			return "idle";
-		}
-		return (runner.isActive() ? "active: " : "pending: ") + task;
+	private static int status(CommandContext<ServerCommandSource> ctx) {
+		Task task = TaskRunner.getInstance().getUserTask();
+		String msg = task == null ? "idle" : task.toString();
+		ctx.getSource().sendFeedback(new LiteralText("Astralclef: " + msg), false);
+		return 1;
+	}
+
+	/** Manual tick for stub testing before a server-tick hook is always on. */
+	private static int manualTick(CommandContext<ServerCommandSource> ctx) {
+		TaskRunner.getInstance().tick();
+		Task task = TaskRunner.getInstance().getUserTask();
+		String msg = task == null ? "idle (finished or none)" : task.toString();
+		ctx.getSource().sendFeedback(new LiteralText("Astralclef tick → " + msg), false);
+		return 1;
 	}
 }
