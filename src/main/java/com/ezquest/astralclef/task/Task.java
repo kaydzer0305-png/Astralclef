@@ -2,7 +2,7 @@ package com.ezquest.astralclef.task;
 
 /**
  * Minimal Altoclef-style task: start / tick (optional subtask) / stop.
- * Compile-safe; no Minecraft world coupling.
+ * Compile-safe; no Minecraft world coupling in the base type.
  */
 public abstract class Task {
 	private boolean active;
@@ -11,9 +11,7 @@ public abstract class Task {
 		return active;
 	}
 
-	/**
-	 * Equality for runner subtask reuse — same goal means keep running.
-	 */
+	/** Equality for runner subtask reuse — same goal means keep running. */
 	public abstract boolean isEqual(Task other);
 
 	protected abstract void onStart();
