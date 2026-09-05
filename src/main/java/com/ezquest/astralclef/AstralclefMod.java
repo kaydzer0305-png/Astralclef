@@ -2,6 +2,7 @@ package com.ezquest.astralclef;
 
 import com.ezquest.astralclef.command.AstralCommands;
 import com.ezquest.astralclef.task.TaskRunner;
+import com.ezquest.astralclef.tasks.create.CreateRecipeExecutor;
 import com.ezquest.astralclef.tasks.create.CreateRecipeKinds;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
@@ -17,7 +18,10 @@ public class AstralclefMod implements ModInitializer {
 		LOGGER.info("Astralclef loaded");
 		CreateRecipeKinds.init();
 		AstralCommands.register();
-		// Advance the active TaskRunner user task each server tick when present.
-		ServerTickEvents.END_SERVER_TICK.register(server -> TaskRunner.getInstance().tick());
+		// Advance TaskRunner then Create recipe jobs each server tick.
+		ServerTickEvents.END_SERVER_TICK.register(server -> {
+			TaskRunner.getInstance().tick();
+			CreateRecipeExecutor.getInstance().tick();
+		});
 	}
 }
