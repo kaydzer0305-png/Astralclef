@@ -10,7 +10,8 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Catalogue of Create / Astral recipe kinds used by Ch0.5–1 planning.
- * Handlers are stubs/hooks — full recipe execution is TODO.
+ * Handlers start / track jobs via {@link CreateRecipeExecutor} (real step
+ * pipeline; Create block APIs still placeholder inside {@link CreateRecipeJob}).
  * <p>
  * Astral flags: Compound smelt; Bronze early (not Brass); Andesite Dust =
  * Press Cobble×4→dust then press dust; mixer alloy cheaper later.
@@ -44,8 +45,8 @@ public final class CreateRecipeKinds {
 		/**
 		 * Attempt to satisfy a recipe of this kind.
 		 *
-		 * @param recipeId opaque id / KubeJS key (stub)
-		 * @return true when the handler claims the request was accepted
+		 * @param recipeId opaque id / KubeJS key
+		 * @return true when the request was accepted, is progressing, or succeeded
 		 */
 		boolean execute(String recipeId);
 	}
@@ -59,22 +60,25 @@ public final class CreateRecipeKinds {
 		if (initialized) {
 			return;
 		}
-		register(Kind.SEQUENCED_ASSEMBLY, id -> stub("SEQUENCED_ASSEMBLY", id));
-		register(Kind.MECHANICAL_CRAFTING, id -> stub("MECHANICAL_CRAFTING", id));
-		register(Kind.FILLING, id -> stub("FILLING", id));
-		register(Kind.BASIN, id -> stub("BASIN", id));
-		register(Kind.COMPOUND_SMELT, id -> stub("COMPOUND_SMELT", id));
-		register(Kind.BRONZE_SMITH, id -> stub("BRONZE_SMITH", id));
-		register(Kind.PRESS_DUST, id -> stub("PRESS_DUST", id));
-		register(Kind.MIXER_BASIN, id -> stub("MIXER_BASIN", id));
-		register(Kind.GROUT, id -> stub("GROUT", id));
+		register(Kind.SEQUENCED_ASSEMBLY, id -> executorHandler(Kind.SEQUENCED_ASSEMBLY, id));
+		register(Kind.MECHANICAL_CRAFTING, id -> executorHandler(Kind.MECHANICAL_CRAFTING, id));
+		register(Kind.FILLING, id -> executorHandler(Kind.FILLING, id));
+		register(Kind.BASIN, id -> executorHandler(Kind.BASIN, id));
+		register(Kind.COMPOUND_SMELT, id -> executorHandler(Kind.COMPOUND_SMELT, id));
+		register(Kind.BRONZE_SMITH, id -> executorHandler(Kind.BRONZE_SMITH, id));
+		register(Kind.PRESS_DUST, id -> executorHandler(Kind.PRESS_DUST, id));
+		register(Kind.MIXER_BASIN, id -> executorHandler(Kind.MIXER_BASIN, id));
+		register(Kind.GROUT, id -> executorHandler(Kind.GROUT, id));
 		initialized = true;
-		LOGGER.info("Create recipe kind handlers registered (stubs): {}", HANDLERS.keySet());
+		LOGGER.info("Create recipe kind handlers registered (executor-backed): {}", HANDLERS.keySet());
 	}
 
-	private static boolean stub(String kind, String recipeId) {
-		LOGGER.debug("{} stub: {}", kind, recipeId);
-		return false;
+	/**
+	 * Start or resume a {@link CreateRecipeJob} through the singleton executor.
+	 * Returns true when accepted / in progress / success; false on failure.
+	 */
+	private static boolean executorHandler(Kind kind, String recipeId) {
+		return CreateRecipeExecutor.getInstance().acceptOrProgress(kind, recipeId);
 	}
 
 	public static void register(Kind kind, RecipeHandler handler) {
