@@ -64,28 +64,32 @@ public final class TaskRunner {
 				userTask = null;
 				return;
 			}
-
 			Task next = userTask.tick();
-
-			if (next == null) {
-				if (subTask != null) {
-					subTask.stop(null);
-					subTask = null;
-				}
-			} else if (subTask != null && subTask.isEqual(next)) {
-				if (!subTask.isFinished()) {
+			if (next != null) {
+				if (subTask != null && subTask.isEqual(next) && subTask.isActive()) {
+					Task nested = subTask.tick();
+					if (nested != null && nested != subTask) {
+						LOGGER.debug("Nested subtask ignored (single-level): {}", nested);
+					}
+					if (subTask.isFinished()) {
+						subTask.stop(null);
+						subTask = null;
+					}
+				} else {
+					if (subTask != null) {
+						subTask.stop(next);
+					}
+					subTask = next;
 					subTask.tick();
+					if (subTask.isFinished()) {
+						subTask.stop(null);
+						subTask = null;
+					}
 				}
-			} else {
-				if (subTask != null) {
-					subTask.stop(next);
-				}
-				subTask = next;
-				if (!subTask.isFinished()) {
-					subTask.tick();
-				}
+			} else if (subTask != null) {
+				subTask.stop(null);
+				subTask = null;
 			}
-
 			if (userTask != null && userTask.isFinished()) {
 				stopChain(null);
 				userTask = null;
