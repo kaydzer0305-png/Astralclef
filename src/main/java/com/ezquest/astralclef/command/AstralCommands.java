@@ -6,8 +6,11 @@ import com.ezquest.astralclef.task.Task;
 import com.ezquest.astralclef.task.TaskRunner;
 import com.ezquest.astralclef.tasks.create.CreateRecipeExecutor;
 import com.ezquest.astralclef.tasks.create.world.CreateWorldContext;
+import com.ezquest.astralclef.combat.GreatBeastPhase;
 import com.ezquest.astralclef.tasks.phases.Ch01GettingStartedTask;
+import com.ezquest.astralclef.tasks.phases.ChAstralSingularityTask;
 import com.ezquest.astralclef.tasks.phases.ChMarsTask;
+import com.ezquest.astralclef.tasks.phases.ChMercuryTask;
 import com.ezquest.astralclef.tasks.phases.ChMoonTask;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.context.CommandContext;
@@ -40,6 +43,12 @@ public final class AstralCommands {
 								.executes(AstralCommands::startMoon))
 						.then(CommandManager.literal("mars")
 								.executes(AstralCommands::startMars))
+						.then(CommandManager.literal("mercury")
+								.executes(AstralCommands::startMercury))
+						.then(CommandManager.literal("singularity")
+								.executes(AstralCommands::startSingularity))
+						.then(CommandManager.literal("beast")
+								.executes(AstralCommands::startBeast))
 						.then(CommandManager.literal("cancel")
 								.executes(AstralCommands::cancel))
 						.then(CommandManager.literal("status")
@@ -69,6 +78,24 @@ public final class AstralCommands {
 	private static int startMars(CommandContext<ServerCommandSource> ctx) {
 		TaskRunner.getInstance().runUserTask(new ChMarsTask());
 		ctx.getSource().sendFeedback(new LiteralText("Astralclef: started Mars phase"), true);
+		return 1;
+	}
+
+	private static int startMercury(CommandContext<ServerCommandSource> ctx) {
+		TaskRunner.getInstance().runUserTask(new ChMercuryTask());
+		ctx.getSource().sendFeedback(new LiteralText("Astralclef: started Mercury phase"), true);
+		return 1;
+	}
+
+	private static int startSingularity(CommandContext<ServerCommandSource> ctx) {
+		TaskRunner.getInstance().runUserTask(new ChAstralSingularityTask());
+		ctx.getSource().sendFeedback(new LiteralText("Astralclef: started Singularity (Ch6 win)"), true);
+		return 1;
+	}
+
+	private static int startBeast(CommandContext<ServerCommandSource> ctx) {
+		TaskRunner.getInstance().runUserTask(new GreatBeastPhase());
+		ctx.getSource().sendFeedback(new LiteralText("Astralclef: started Great Beast"), true);
 		return 1;
 	}
 
