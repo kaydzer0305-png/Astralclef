@@ -1,6 +1,8 @@
 package com.ezquest.astralclef.tasks.phases.ch01;
 
+import com.ezquest.astralclef.recipes.KubeJsAwareCatalogue;
 import com.ezquest.astralclef.task.Task;
+import com.ezquest.astralclef.tasks.create.CreateRecipeKinds;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -13,6 +15,9 @@ import org.slf4j.LoggerFactory;
  *   <li>Essential Materials — Tin, Copper, Andesite, Clay</li>
  * </ol>
  * FTB: quests31 (Ch1 unlock). SNBT edges unverified.
+ * <p>
+ * Refreshes {@link KubeJsAwareCatalogue#shared()} so later subtasks can resolve
+ * {@link Ch01RecipeIds} / bind placeholders. Does not start Create jobs (those run in Alloy/Mixer/Grout).
  */
 public final class Ch05UnlockSubtask extends Task {
 	private static final Logger LOGGER = LoggerFactory.getLogger("astralclef/ch01/ch05");
@@ -35,18 +40,23 @@ public final class Ch05UnlockSubtask extends Task {
 	@Override
 	protected void onStart() {
 		step = Step.CRAFTING_AND_TOOLS;
+		CreateRecipeKinds.init();
+		KubeJsAwareCatalogue.shared().refresh();
 		LOGGER.info("Ch0.5 unlock: tools → furnace → Fe/Sn/Cu → essential materials (quests31)");
 	}
 
 	@Override
 	protected Task onTick() {
+		KubeJsAwareCatalogue cat = KubeJsAwareCatalogue.shared();
 		switch (step) {
 			case CRAFTING_AND_TOOLS:
 				// TODO: crafting table; Hephaestus patterns/part builder/tinker station OR copper tools
 				step = Step.FURNACE;
 				break;
 			case FURNACE:
-				// TODO: place/smelt furnace
+				// TODO: place furnace; catalogue already knows compound-smelt bind for Alloy phase
+				LOGGER.debug("furnace prep; compound_smelt known={}",
+						cat.knows(Ch01RecipeIds.ANDESITE_COMPOUND_SMELT));
 				step = Step.MINE_METALS;
 				break;
 			case MINE_METALS:
@@ -54,7 +64,9 @@ public final class Ch05UnlockSubtask extends Task {
 				step = Step.ESSENTIAL_MATERIALS;
 				break;
 			case ESSENTIAL_MATERIALS:
-				// TODO: stock Tin, Copper, Andesite, Clay — quests31 Ch1 unlock
+				LOGGER.debug("essential materials; bronze_smith known={} grout known={}",
+						cat.knows(Ch01RecipeIds.BRONZE_SMITH),
+						cat.knows(Ch01RecipeIds.GROUT));
 				step = Step.DONE;
 				break;
 			case DONE:

@@ -7,12 +7,16 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
+import com.ezquest.astralclef.recipes.Ch01RecipeBindings;
 import com.ezquest.astralclef.tasks.create.world.CreateWorldContext;
 
+import net.minecraft.item.ItemStack;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
 
 import org.slf4j.Logger;
@@ -22,6 +26,9 @@ import org.slf4j.LoggerFactory;
  * Singleton executor for in-flight {@link CreateRecipeJob}s.
  * Holds {@link CreateWorldContext} and auto-binds from the first online player
  * when jobs need a world and context is unset.
+ * <p>
+ * When {@code recipeId} is an {@code astralclef:bind/*} key, resolves via
+ * {@link Ch01RecipeBindings} and seeds INSERT stacks from the spec.
  */
 public final class CreateRecipeExecutor {
 	private static final Logger LOGGER = LoggerFactory.getLogger("astralclef/create-executor");
@@ -48,6 +55,9 @@ public final class CreateRecipeExecutor {
 	public void setWorldContext(ServerWorld world, BlockPos origin, int radius) {
 		worldContext.set(world, origin, radius);
 		LOGGER.info("Create world context set: {}", worldContext);
+		if (world != null && world.getServer() != null) {
+			Ch01RecipeBindings.refresh(world.getServer());
+		}
 	}
 
 	public void clearWorldContext() {
@@ -63,9 +73,32 @@ public final class CreateRecipeExecutor {
 			return existing;
 		}
 		CreateRecipeJob job = new CreateRecipeJob(kind, recipeId);
+		seedFromBindings(job);
 		jobs.put(k, job);
 		LOGGER.info("Started Create recipe job: {} [{}]", recipeId, kind);
 		return job;
+	}
+
+	private void seedFromBindings(CreateRecipeJob job) {
+		Optional<Ch01RecipeBindings.RecipeSpec> spec = Ch01RecipeBindings.byBind(job.getRecipeId());
+		if (spec.isEmpty()) {
+			return;
+		}
+		MinecraftServer server = worldContext.isValid() ? worldContext.getWorld().getServer() : null;
+		if (server != null) {
+			Optional<Identifier> resolved = Ch01RecipeBindings.resolve(server, spec.get());
+			resolved.ifPresent(id -> LOGGER.info("Job {} resolved to datapack id {}",
+					job.getRecipeId(), id));
+		}
+		List<ItemStack> inputs = Ch01RecipeBindings.inputStacks(spec.get());
+		if (!inputs.isEmpty()) {
+			// Seed first concrete input; multi-insert handled across INSERT ticks later
+			job.setPendingInsert(inputs.get(0).copy());
+			job.setExpectedOutput(Ch01RecipeBindings.outputStack(spec.get()));
+			job.setBindingInputs(inputs);
+			LOGGER.info("Seeded job {} with {} input stack(s), expect {}",
+					job.getRecipeId(), inputs.size(), spec.get().outputId);
+		}
 	}
 
 	/** Advance jobs; auto-bind world context from first player when needed. */
@@ -119,8 +152,15 @@ public final class CreateRecipeExecutor {
 		ServerWorld world = (ServerWorld) player.getWorld();
 		BlockPos origin = player.getBlockPos();
 		worldContext.set(world, origin, CreateWorldContext.DEFAULT_SEARCH_RADIUS);
+		Ch01RecipeBindings.refresh(server);
 		LOGGER.info("Auto-bound Create world context from player {}: {}",
 				player.getEntityName(), worldContext);
+		// Late-seed any jobs that started before context existed
+		for (CreateRecipeJob job : jobs.values()) {
+			if (!job.isDone() && job.getPendingInsert().isEmpty() && Ch01RecipeBindings.isBindId(job.getRecipeId())) {
+				seedFromBindings(job);
+			}
+		}
 	}
 
 	public CreateRecipeJob get(CreateRecipeKinds.Kind kind, String recipeId) {

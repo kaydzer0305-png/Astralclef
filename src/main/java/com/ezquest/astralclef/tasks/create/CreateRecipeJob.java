@@ -1,5 +1,7 @@
 package com.ezquest.astralclef.tasks.create;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 import com.ezquest.astralclef.tasks.create.world.CreateMachineIO;
@@ -17,6 +19,7 @@ import org.slf4j.LoggerFactory;
  * In-flight Create / Astral recipe job.
  * Pipeline: LOCATE_MACHINE → INSERT → PROCESS → EXTRACT → DONE.
  * Uses {@link CreateMachineLocator} / {@link CreateMachineIO} when a world context is set.
+ * Binding inputs (from {@code astralclef:bind/*}) may span multiple INSERT ticks.
  */
 public final class CreateRecipeJob {
 	private static final Logger LOGGER = LoggerFactory.getLogger("astralclef/create-job");
@@ -46,7 +49,10 @@ public final class CreateRecipeJob {
 	private String failReason;
 	private BlockPos machinePos;
 	private ItemStack pendingInsert = ItemStack.EMPTY;
+	private ItemStack expectedOutput = ItemStack.EMPTY;
 	private ItemStack lastExtracted = ItemStack.EMPTY;
+	private final List<ItemStack> bindingInputs = new ArrayList<>();
+	private int bindingInputIndex;
 
 	public CreateRecipeJob(CreateRecipeKinds.Kind kind, String recipeId) {
 		if (kind == null) {
@@ -70,9 +76,32 @@ public final class CreateRecipeJob {
 	public String getFailReason() { return failReason; }
 	public BlockPos getMachinePos() { return machinePos; }
 	public ItemStack getLastExtracted() { return lastExtracted; }
+	public ItemStack getPendingInsert() { return pendingInsert; }
+	public ItemStack getExpectedOutput() { return expectedOutput; }
 
 	public void setPendingInsert(ItemStack stack) {
 		this.pendingInsert = stack == null ? ItemStack.EMPTY : stack;
+	}
+
+	public void setExpectedOutput(ItemStack stack) {
+		this.expectedOutput = stack == null ? ItemStack.EMPTY : stack;
+	}
+
+	public void setBindingInputs(List<ItemStack> inputs) {
+		bindingInputs.clear();
+		bindingInputIndex = 0;
+		if (inputs == null) {
+			return;
+		}
+		for (ItemStack s : inputs) {
+			if (s != null && !s.isEmpty()) {
+				bindingInputs.add(s.copy());
+			}
+		}
+		if (!bindingInputs.isEmpty() && pendingInsert.isEmpty()) {
+			pendingInsert = bindingInputs.get(0).copy();
+			bindingInputIndex = 0;
+		}
 	}
 
 	public boolean tick() {
@@ -136,16 +165,28 @@ public final class CreateRecipeJob {
 			fail("insert: block entity missing at " + machinePos.toShortString());
 			return true;
 		}
-		// Empty pending = soft verify-only insert (inputs supplied by later inventory wiring).
-		if (pendingInsert.isEmpty()) {
+		if (pendingInsert.isEmpty() && bindingInputIndex < bindingInputs.size()) {
+			pendingInsert = bindingInputs.get(bindingInputIndex).copy();
+		}
+		if (pendingInsert.isEmpty() && bindingInputs.isEmpty()) {
 			LOGGER.info("CreateRecipeJob {} [{}] INSERT verify-only at {} — {}",
 					recipeId, kind, machinePos.toShortString(), describeStep());
 			return goTo(Step.PROCESS);
 		}
+		if (pendingInsert.isEmpty()) {
+			return goTo(Step.PROCESS);
+		}
 		ItemStack remaining = CreateMachineIO.insert(ctx.getWorld(), machinePos, pendingInsert);
 		if (remaining.isEmpty()) {
+			LOGGER.info("CreateRecipeJob {} [{}] INSERT ok item {} at {}",
+					recipeId, kind, pendingInsert.getItem(), machinePos.toShortString());
 			pendingInsert = ItemStack.EMPTY;
-			LOGGER.info("CreateRecipeJob {} [{}] INSERT ok at {}", recipeId, kind, machinePos.toShortString());
+			bindingInputIndex++;
+			if (bindingInputIndex < bindingInputs.size()) {
+				pendingInsert = bindingInputs.get(bindingInputIndex).copy();
+				ticksInStep = 0;
+				return false;
+			}
 			return goTo(Step.PROCESS);
 		}
 		pendingInsert = remaining;
@@ -165,8 +206,10 @@ public final class CreateRecipeJob {
 			fail("process: machine disappeared at " + machinePos.toShortString());
 			return true;
 		}
+		boolean runningHint = CreateMachineIO.isLikelyProcessing(ctx.getWorld(), machinePos);
 		if (ticksInStep >= PROCESS_STEP_TICKS) {
-			LOGGER.info("CreateRecipeJob {} [{}] PROCESS done — {}", recipeId, kind, describeStep());
+			LOGGER.info("CreateRecipeJob {} [{}] PROCESS done (runningHint={}) — {}",
+					recipeId, kind, runningHint, describeStep());
 			return goTo(Step.EXTRACT);
 		}
 		return false;
@@ -181,7 +224,9 @@ public final class CreateRecipeJob {
 			fail("extract: block entity missing at " + machinePos.toShortString());
 			return true;
 		}
-		ItemStack out = CreateMachineIO.extract(ctx.getWorld(), machinePos, ItemStack.EMPTY, 64);
+		ItemStack filter = expectedOutput.isEmpty() ? ItemStack.EMPTY : expectedOutput;
+		int want = expectedOutput.isEmpty() ? 64 : Math.max(1, expectedOutput.getCount());
+		ItemStack out = CreateMachineIO.extract(ctx.getWorld(), machinePos, filter, want);
 		if (!out.isEmpty()) {
 			lastExtracted = out;
 			LOGGER.info("CreateRecipeJob {} [{}] EXTRACT got {} x{}", recipeId, kind, out.getItem(), out.getCount());
@@ -189,9 +234,8 @@ public final class CreateRecipeJob {
 			failed = false;
 			return goTo(Step.DONE);
 		}
-		// Soft success when inventory empty but machine present (typed BE extract TODO).
 		if (ticksInStep >= IO_TIMEOUT_TICKS) {
-			LOGGER.info("CreateRecipeJob {} [{}] EXTRACT timeout — completing soft (typed BE TODO)", recipeId, kind);
+			LOGGER.info("CreateRecipeJob {} [{}] EXTRACT timeout — completing soft", recipeId, kind);
 			success = true;
 			failed = false;
 			return goTo(Step.DONE);

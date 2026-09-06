@@ -1,5 +1,7 @@
 package com.ezquest.astralclef.tasks.create.world;
 
+import java.util.Optional;
+
 import net.fabricmc.fabric.api.transfer.v1.item.ItemStorage;
 import net.fabricmc.fabric.api.transfer.v1.item.ItemVariant;
 import net.fabricmc.fabric.api.transfer.v1.storage.Storage;
@@ -18,8 +20,8 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Insert / extract helpers for Create machines.
- * Prefers Fabric Transfer {@link ItemStorage}; falls back to {@link Inventory}.
- * Full Create-specific BE typed I/O (BasinBehaviour, DepotBehaviour, etc.) is TODO.
+ * Prefers typed Create BE I/O via {@link CreateBlockEntityIO} (Basin / Depot / Crafter / …),
+ * then Fabric Transfer {@link ItemStorage}, then {@link Inventory}.
  */
 public final class CreateMachineIO {
 	private static final Logger LOGGER = LoggerFactory.getLogger("astralclef/create-io");
@@ -46,6 +48,11 @@ public final class CreateMachineIO {
 		LOGGER.info("insert: trying {} x{} into {} ({})",
 				stack.getItem(), stack.getCount(), pos.toShortString(), be.getType());
 
+		Optional<ItemStack> typed = CreateBlockEntityIO.tryInsert(world, pos, stack);
+		if (typed.isPresent()) {
+			return typed.get();
+		}
+
 		ItemStack viaTransfer = insertTransfer(world, pos, stack);
 		if (viaTransfer.getCount() != stack.getCount() || viaTransfer.isEmpty()) {
 			return viaTransfer;
@@ -67,11 +74,20 @@ public final class CreateMachineIO {
 		}
 		LOGGER.info("extract: from {} ({}) max={}", pos.toShortString(), be.getType(), maxCount);
 
+		Optional<ItemStack> typed = CreateBlockEntityIO.tryExtract(world, pos, filter, maxCount);
+		if (typed.isPresent() && !typed.get().isEmpty()) {
+			return typed.get();
+		}
+
 		ItemStack viaTransfer = extractTransfer(world, pos, filter, maxCount);
 		if (!viaTransfer.isEmpty()) {
 			return viaTransfer;
 		}
-		return extractInventory(be, filter, maxCount);
+		ItemStack viaInv = extractInventory(be, filter, maxCount);
+		if (!viaInv.isEmpty()) {
+			return viaInv;
+		}
+		return typed.orElse(ItemStack.EMPTY);
 	}
 
 	/** Verify machine still present; used by PROCESS step. */
@@ -81,6 +97,24 @@ public final class CreateMachineIO {
 			LOGGER.warn("verifyPresent failed at {}", pos != null ? pos.toShortString() : "null");
 		}
 		return ok;
+	}
+
+	/**
+	 * PROCESS helper: true when Create press/mixer reports {@code running}, or when the
+	 * basin's operator above is running. False when undetectable or idle.
+	 */
+	public static boolean isLikelyProcessing(ServerWorld world, BlockPos pos) {
+		if (world == null || pos == null) {
+			return false;
+		}
+		BlockEntity be = world.getBlockEntity(pos);
+		Optional<Boolean> typed = CreateBlockEntityIO.isProcessing(be);
+		if (typed.isPresent()) {
+			return typed.get();
+		}
+		BlockEntity above = world.getBlockEntity(pos.up(2));
+		Optional<Boolean> op = CreateBlockEntityIO.isProcessing(above);
+		return op.orElse(false);
 	}
 
 	private static ItemStack insertTransfer(ServerWorld world, BlockPos pos, ItemStack stack) {
@@ -147,8 +181,7 @@ public final class CreateMachineIO {
 
 	private static ItemStack insertInventory(BlockEntity be, ItemStack stack) {
 		if (!(be instanceof Inventory inv)) {
-			LOGGER.info("insertInventory: BE is not Inventory — placeholder accept for PROCESS");
-			// Machines like mixer/press may not expose Inventory; treat as soft-ok for scaffolding.
+			LOGGER.info("insertInventory: BE is not Inventory — soft-ok (typed Create path already tried)");
 			return ItemStack.EMPTY;
 		}
 		ItemStack remaining = stack.copy();
@@ -173,7 +206,7 @@ public final class CreateMachineIO {
 
 	private static ItemStack extractInventory(BlockEntity be, ItemStack filter, int maxCount) {
 		if (!(be instanceof Inventory inv)) {
-			LOGGER.info("extractInventory: BE is not Inventory — returning empty (typed Create BE TODO)");
+			LOGGER.info("extractInventory: BE is not Inventory — empty after typed Create attempt");
 			return ItemStack.EMPTY;
 		}
 		for (int i = 0; i < inv.size(); i++) {

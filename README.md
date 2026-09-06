@@ -20,11 +20,32 @@ Runtime **requires Create** installed. Compile classpath includes Create via `bu
 
 | Phase | Focus | Status |
 |-------|--------|--------|
-| **Ch0.5–1** | Getting started (early Create + Astral basics) | Stubbed + Create locate/IO wired |
+| **Ch0.5–1** | Getting started (early Create + Astral basics) | Bindings + typed BE I/O + Create jobs |
 | Moon | Lunar progression | Stub |
 | Mars | Martian progression | Stub |
 | Mercury | Mercurial progression | Stub |
 | Singularity | Astral Singularity (endgame win) | Stub |
+
+### Ch01 recipe bindings (`Ch01RecipeBindings`)
+
+Authoritative Astral item ids + `RecipeSpec` (type, inputs, output) with `astralclef:bind/*` placeholders.
+Resolve live datapack/KubeJS recipe ids via **RecipeManager type + I/O** (do not hard-depend on guessed `kubejs:` auto-ids).
+
+| Bind | Type | I/O (Astral kubejs) |
+|------|------|---------------------|
+| `astralclef:bind/bronze_smith` | `minecraft:smithing` | Cu + Sn → `createastral:bronze_ingot` |
+| `astralclef:bind/compound_shaped` | `minecraft:crafting_shaped` | 3 andesite / 3 zinc_nugget\|`#create:alloy_nuggets` / 3 clay → compound (BBB/AAA/CCC) |
+| `astralclef:bind/compound_smelt` | `minecraft:smelting` | compound → `create:andesite_alloy` |
+| `astralclef:bind/compound_blast` | `minecraft:blasting` | same (stock Create alloy recipes removed) |
+| `astralclef:bind/press_dust` | `create:pressing` | cobble → `techreborn:andesite_dust` |
+| `astralclef:bind/compact_andesite` | `create:compacting` | 4× dust → andesite |
+| `astralclef:bind/mixer_compound_mixture` | `create:mixing` | andesite+nugget+clay → `kubejs:compound_mixture` (**not** mixer→alloy) |
+| `astralclef:bind/grout` | `create:mixing` | alloy + zinc + 8 gravel → 8 `tconstruct:grout` |
+
+Items: bronze/sheet `createastral:*`; compound `createastral:andesite_compound`; alloy `create:andesite_alloy`; dust `techreborn:andesite_dust`; grout `tconstruct:grout`; fluid `kubejs:compound_mixture`.
+
+`CreateRecipeExecutor` seeds INSERT stacks from bindings; `KubeJsAwareCatalogue.shared()` / `ch01()` expose the catalogue.
+Swap opaque ids in `Ch01RecipeIds` (aliases to `Ch01RecipeBindings.BIND_*`) when Research lands exact JEI ids.
 
 ### Create world locate + machine I/O
 
@@ -33,22 +54,28 @@ Package `com.ezquest.astralclef.tasks.create.world`:
 - `CreateMachineType` — Kind → block ids (`create:basin`, `mechanical_press`, `mechanical_mixer`, `depot`, `belt`, `mechanical_crafter`, `spout`, `millstone`, `andesite_casing`, plus vanilla furnace/smith)
 - `CreateWorldContext` — ServerWorld + origin + searchRadius (default 16)
 - `CreateMachineLocator.locate` — cube scan; nearest matching block
-- `CreateMachineIO` — Fabric Transfer insert/extract with Inventory fallback; verifies BE present
-
-`CreateRecipeJob` stores `machinePos` after LOCATE; fails after 100 ticks if no context/machine. INSERT/PROCESS/EXTRACT call CreateMachineIO.
+- `CreateMachineIO` — **typed Create BE** (`CreateBlockEntityIO`: Basin / Depot / Press / Mixer / Spout / Crafter via reflection) → Fabric Transfer → Inventory fallback
+- `CreateRecipeJob` — LOCATE → multi-INSERT (binding inputs) → PROCESS → EXTRACT (output filter)
 
 `CreateRecipeExecutor.tick(server)` auto-binds context from the first online player when jobs need it. Manual: `/astralclef context`.
 
-**Remaining gaps:** typed Create BE behaviours (BasinBehaviour, DepotBehaviour, crafter grid fill); full Transfer for all Create storages; recipe input ItemStacks from catalogue; kinetic PROCESS detection.
+**Remaining gaps / soft:**
+- Spout / `compound_mixture` **fluid** Transfer
+- Basin filter **write**; crafter **pattern** encode (grid slots only)
+- Press/Mixer PROCESS: reflective `running` hint only (no RPM/stress)
+- Exact pack-local recipe ids (bind placeholders resolve via RecipeManager; `Ch01RecipeIds` constants for swap)
+- DepotBehaviour / Create package renames when reflection soft-fails
 
 ### Ch0.5–1 Create loop (ship order)
 
-Stubbed in `Ch01GettingStartedTask` via `TaskRunner` (`/astralclef ch01`):
+`Ch01GettingStartedTask` via `TaskRunner` (`/astralclef ch01`):
 
 1. **Ch0.5 unlock** — Crafting/Hephaestus or copper tools → Furnace → Fe/Sn/Cu → Essential Materials
-2. **Alloy / Casing** — Bronze (Cu+Sn) → Andesite Compound smelt → Alloy stockpile → Andesite Casing
-3. **Mixer loop** — Hand Crank / shafts / water wheel → Millstone / Press / Mixer+Basin
+2. **Alloy / Casing** — Bronze smith → Compound shaped → Smelt/Blast → Alloy stockpile → Andesite Casing
+3. **Mixer loop** — Kinetics → Mill/Press/Mixer → press-dust → compact → early mixer mixture
 4. **Grout gate** — Grout via Mixer → Chapter 2 unlock
+
+Subtasks fire `CreateRecipeKinds` with bind ids and wait for job completion.
 
 ## Commands
 

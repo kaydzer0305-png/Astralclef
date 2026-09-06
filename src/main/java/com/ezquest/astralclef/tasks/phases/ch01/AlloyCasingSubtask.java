@@ -1,19 +1,19 @@
 package com.ezquest.astralclef.tasks.phases.ch01;
 
 import com.ezquest.astralclef.task.Task;
+import com.ezquest.astralclef.tasks.create.CreateRecipeExecutor;
 import com.ezquest.astralclef.tasks.create.CreateRecipeKinds;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Alloy / Casing stub: Welcome to Create → Bronze → Compound → Alloy → Casing.
+ * Alloy / Casing: Welcome to Create → Bronze → Compound craft → Compound smelt → Alloy → Casing.
  * <ul>
- *   <li>Bronze = smith Copper+Tin (not Brass)</li>
- *   <li>Andesite Compound → furnace smelt (quests26)</li>
- *   <li>Andesite Alloy stockpile (quests5)</li>
+ *   <li>Bronze = smith Copper+Tin ({@link Ch01RecipeIds#BRONZE_SMITH})</li>
+ *   <li>Andesite Compound shaped BBB/AAA/CCC ({@link Ch01RecipeIds#ANDESITE_COMPOUND_SHAPED})</li>
+ *   <li>Compound → furnace/blast alloy (quests26) — stock Create alloy recipes removed in Astral</li>
  *   <li>Andesite Casing (strip log + R-click alloy)</li>
  * </ul>
- * SNBT edges unverified for quests26 / quests5.
  */
 public final class AlloyCasingSubtask extends Task {
 	private static final Logger LOGGER = LoggerFactory.getLogger("astralclef/ch01/alloy");
@@ -21,6 +21,7 @@ public final class AlloyCasingSubtask extends Task {
 	private enum Step {
 		WELCOME_CREATE,
 		BRONZE_SMITH,
+		COMPOUND_SHAPED,
 		COMPOUND_SMELT,
 		ALLOY_STOCKPILE,
 		ANDESITE_CASING,
@@ -37,29 +38,39 @@ public final class AlloyCasingSubtask extends Task {
 	@Override
 	protected void onStart() {
 		step = Step.WELCOME_CREATE;
-		LOGGER.info("Alloy/Casing: Bronze → Compound (quests26) → Alloy (quests5) → Casing");
+		LOGGER.info("Alloy/Casing: Bronze → Compound shaped → Smelt/Blast → Alloy → Casing");
 	}
 
 	@Override
 	protected Task onTick() {
 		switch (step) {
 			case WELCOME_CREATE:
-				// TODO: Welcome to Create quest handshake
 				step = Step.BRONZE_SMITH;
 				break;
 			case BRONZE_SMITH:
-				CreateRecipeKinds.bronzeSmith("astral:smithing/bronze");
+				if (!awaitKind(CreateRecipeKinds.Kind.BRONZE_SMITH, Ch01RecipeIds.BRONZE_SMITH,
+						() -> CreateRecipeKinds.bronzeSmith(Ch01RecipeIds.BRONZE_SMITH))) {
+					break;
+				}
+				step = Step.COMPOUND_SHAPED;
+				break;
+			case COMPOUND_SHAPED:
+				if (!awaitKind(CreateRecipeKinds.Kind.MECHANICAL_CRAFTING, Ch01RecipeIds.ANDESITE_COMPOUND_SHAPED,
+						() -> CreateRecipeKinds.compoundShaped(Ch01RecipeIds.ANDESITE_COMPOUND_SHAPED))) {
+					break;
+				}
 				step = Step.COMPOUND_SMELT;
 				break;
 			case COMPOUND_SMELT:
-				CreateRecipeKinds.compoundSmelt("astral:smelting/andesite_compound");
+				CreateRecipeKinds.compoundBlast(Ch01RecipeIds.ANDESITE_COMPOUND_BLAST);
+				if (!awaitKind(CreateRecipeKinds.Kind.COMPOUND_SMELT, Ch01RecipeIds.ANDESITE_COMPOUND_SMELT,
+						() -> CreateRecipeKinds.compoundSmelt(Ch01RecipeIds.ANDESITE_COMPOUND_SMELT))) {
+					break;
+				}
 				step = Step.ALLOY_STOCKPILE;
 				break;
 			case ALLOY_STOCKPILE:
-				// Early craft path; mixer alloy cheaper later
-				CreateRecipeKinds.tryExecute(
-						CreateRecipeKinds.Kind.MECHANICAL_CRAFTING,
-						"create:crafting/materials/andesite_alloy");
+				// Stockpile is inventory goal; smelt/blast already produce alloy
 				step = Step.ANDESITE_CASING;
 				break;
 			case ANDESITE_CASING:
@@ -70,6 +81,22 @@ public final class AlloyCasingSubtask extends Task {
 				break;
 		}
 		return null;
+	}
+
+	/**
+	 * Fire recipe kind and wait until the job is done (success or fail).
+	 * @return true when finished and caller may advance
+	 */
+	private boolean awaitKind(CreateRecipeKinds.Kind kind, String bindId, Runnable fire) {
+		fire.run();
+		CreateRecipeExecutor exec = CreateRecipeExecutor.getInstance();
+		if (!exec.isDone(kind, bindId)) {
+			return false;
+		}
+		if (!exec.isSuccess(kind, bindId)) {
+			LOGGER.warn("Alloy step {} finished without success — continuing", bindId);
+		}
+		return true;
 	}
 
 	@Override

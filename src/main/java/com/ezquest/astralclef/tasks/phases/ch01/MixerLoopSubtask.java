@@ -1,21 +1,17 @@
 package com.ezquest.astralclef.tasks.phases.ch01;
 
 import com.ezquest.astralclef.task.Task;
+import com.ezquest.astralclef.tasks.create.CreateRecipeExecutor;
 import com.ezquest.astralclef.tasks.create.CreateRecipeKinds;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
  * Mixer loop: kinetics → Millstone / Press / Mixer+Basin → sheets and utilities.
- * <ol>
- *   <li>Hand Crank → Shafts/Cogwheels → Water Wheel SU</li>
- *   <li>Millstone → Mechanical Press → Mixer + Basin</li>
- *   <li>Iron Sheets; Chutes; Wrench; Gearbox / Encased Chain Drive / Clutch</li>
- *   <li>Fans (lava/water/campfire)</li>
- *   <li>Mechanical Drill + Saw (quartz via Diorite mill; Nether off)</li>
- *   <li>Andesite Dust via press-dust (cobble×4→dust→press)</li>
- * </ol>
- * Defer: trains, ComputerCraft, Astral Signals.
+ * <p>
+ * Early mixer uses {@link Ch01RecipeIds#MIXER_BASIN_MIX}
+ * (andesite+nugget+clay → {@code kubejs:compound_mixture}) — NOT direct mixer→alloy.
+ * Press-dust: cobble → dust; compact 4×dust → andesite.
  */
 public final class MixerLoopSubtask extends Task {
 	private static final Logger LOGGER = LoggerFactory.getLogger("astralclef/ch01/mixer");
@@ -27,6 +23,8 @@ public final class MixerLoopSubtask extends Task {
 		FANS,
 		DRILL_AND_SAW,
 		PRESS_DUST,
+		COMPACT_ANDESITE,
+		MIXER_COMPOUND,
 		DONE
 	}
 
@@ -40,20 +38,16 @@ public final class MixerLoopSubtask extends Task {
 	@Override
 	protected void onStart() {
 		step = Step.KINETICS_POWER;
-		LOGGER.info("Mixer loop: kinetics → mill/press/mixer → sheets/fans/drill → press-dust");
+		LOGGER.info("Mixer loop: kinetics → mill/press/mixer → press-dust → compact → mixture");
 	}
 
 	@Override
 	protected Task onTick() {
 		switch (step) {
 			case KINETICS_POWER:
-				// TODO: hand crank, shafts, cogwheels, water wheel SU
 				CreateRecipeKinds.tryExecute(
 						CreateRecipeKinds.Kind.MECHANICAL_CRAFTING,
 						"create:crafting/kinetics/hand_crank");
-				CreateRecipeKinds.tryExecute(
-						CreateRecipeKinds.Kind.MECHANICAL_CRAFTING,
-						"create:crafting/kinetics/shaft");
 				step = Step.MILL_PRESS_MIXER;
 				break;
 			case MILL_PRESS_MIXER:
@@ -63,32 +57,60 @@ public final class MixerLoopSubtask extends Task {
 				CreateRecipeKinds.tryExecute(
 						CreateRecipeKinds.Kind.MECHANICAL_CRAFTING,
 						"create:crafting/kinetics/mechanical_press");
-				CreateRecipeKinds.mixerBasin("create:crafting/kinetics/mechanical_mixer");
+				CreateRecipeKinds.tryExecute(
+						CreateRecipeKinds.Kind.MECHANICAL_CRAFTING,
+						"create:crafting/kinetics/mechanical_mixer");
 				step = Step.SHEETS_AND_UTILS;
 				break;
 			case SHEETS_AND_UTILS:
-				// TODO: iron sheets, chutes, wrench, gearbox, encased chain drive, clutch
 				CreateRecipeKinds.tryExecute(
 						CreateRecipeKinds.Kind.BASIN,
 						"create:pressing/iron_ingot");
 				step = Step.FANS;
 				break;
 			case FANS:
-				// TODO: encased fan + lava/water/campfire processing
 				step = Step.DRILL_AND_SAW;
 				break;
 			case DRILL_AND_SAW:
-				// TODO: mechanical drill + saw; quartz via diorite mill (Nether off)
 				step = Step.PRESS_DUST;
 				break;
 			case PRESS_DUST:
-				CreateRecipeKinds.pressDust("astral:pressing/andesite_dust");
+				if (!awaitKind(CreateRecipeKinds.Kind.PRESS_DUST, Ch01RecipeIds.PRESS_DUST,
+						() -> CreateRecipeKinds.pressDust(Ch01RecipeIds.PRESS_DUST))) {
+					break;
+				}
+				step = Step.COMPACT_ANDESITE;
+				break;
+			case COMPACT_ANDESITE:
+				if (!awaitKind(CreateRecipeKinds.Kind.BASIN, Ch01RecipeIds.COMPACT_ANDESITE,
+						() -> CreateRecipeKinds.compactAndesite(Ch01RecipeIds.COMPACT_ANDESITE))) {
+					break;
+				}
+				step = Step.MIXER_COMPOUND;
+				break;
+			case MIXER_COMPOUND:
+				if (!awaitKind(CreateRecipeKinds.Kind.MIXER_BASIN, Ch01RecipeIds.MIXER_BASIN_MIX,
+						() -> CreateRecipeKinds.mixerBasin(Ch01RecipeIds.MIXER_BASIN_MIX))) {
+					break;
+				}
 				step = Step.DONE;
 				break;
 			case DONE:
 				break;
 		}
 		return null;
+	}
+
+	private boolean awaitKind(CreateRecipeKinds.Kind kind, String bindId, Runnable fire) {
+		fire.run();
+		CreateRecipeExecutor exec = CreateRecipeExecutor.getInstance();
+		if (!exec.isDone(kind, bindId)) {
+			return false;
+		}
+		if (!exec.isSuccess(kind, bindId)) {
+			LOGGER.warn("Mixer step {} finished without success — continuing", bindId);
+		}
+		return true;
 	}
 
 	@Override

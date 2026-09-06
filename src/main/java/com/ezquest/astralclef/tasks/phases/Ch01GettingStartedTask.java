@@ -17,6 +17,9 @@ import org.slf4j.LoggerFactory;
  * quests26 (Andesite Compound smelt), quests5 (Andesite Alloy stockpile),
  * quests25 (Grout / Chapter 2 unlock).
  * <p>
+ * Recipe I/O bound via {@link com.ezquest.astralclef.recipes.Ch01RecipeBindings}
+ * ({@code astralclef:bind/*}); subtasks wait on {@link com.ezquest.astralclef.tasks.create.CreateRecipeKinds} jobs.
+ * <p>
  * Does not implement Moon/Mars/Mercury/Singularity. Defers trains, ComputerCraft,
  * Astral Signals.
  */
