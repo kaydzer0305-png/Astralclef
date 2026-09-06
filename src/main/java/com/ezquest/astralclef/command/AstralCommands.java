@@ -49,6 +49,11 @@ public final class AstralCommands {
 								.executes(AstralCommands::startSingularity))
 						.then(CommandManager.literal("beast")
 								.executes(AstralCommands::startBeast))
+						.then(CommandManager.literal("gather")
+								.then(CommandManager.argument("item", com.mojang.brigadier.arguments.StringArgumentType.string())
+										.then(CommandManager.argument("count", com.mojang.brigadier.arguments.IntegerArgumentType.integer(1, 640))
+												.executes(AstralCommands::gather))
+										.executes(AstralCommands::gatherDefault)))
 						.then(CommandManager.literal("cancel")
 								.executes(AstralCommands::cancel))
 						.then(CommandManager.literal("status")
@@ -96,6 +101,21 @@ public final class AstralCommands {
 	private static int startBeast(CommandContext<ServerCommandSource> ctx) {
 		TaskRunner.getInstance().runUserTask(new GreatBeastPhase());
 		ctx.getSource().sendFeedback(new LiteralText("Astralclef: started Great Beast"), true);
+		return 1;
+	}
+
+	private static int gather(CommandContext<ServerCommandSource> ctx) {
+		String item = com.mojang.brigadier.arguments.StringArgumentType.getString(ctx, "item");
+		int count = com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(ctx, "count");
+		TaskRunner.getInstance().runUserTask(new com.ezquest.astralclef.tasks.gather.GatherTask(item, count));
+		ctx.getSource().sendFeedback(new LiteralText("Astralclef: gather " + item + " x" + count), true);
+		return 1;
+	}
+
+	private static int gatherDefault(CommandContext<ServerCommandSource> ctx) {
+		String item = com.mojang.brigadier.arguments.StringArgumentType.getString(ctx, "item");
+		TaskRunner.getInstance().runUserTask(new com.ezquest.astralclef.tasks.gather.GatherTask(item, 1));
+		ctx.getSource().sendFeedback(new LiteralText("Astralclef: gather " + item + " x1"), true);
 		return 1;
 	}
 

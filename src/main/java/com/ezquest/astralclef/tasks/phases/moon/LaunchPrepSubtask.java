@@ -3,7 +3,6 @@ package com.ezquest.astralclef.tasks.phases.moon;
 import com.ezquest.astralclef.task.Task;
 import com.ezquest.astralclef.world.AdAstraRoutes;
 import com.ezquest.astralclef.world.RocketHelper;
-import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,6 +24,7 @@ public final class LaunchPrepSubtask extends Task {
 	}
 
 	private Step step = Step.OXYGEN_AND_SUIT;
+	private Task gatherTask;
 
 	@Override
 	public boolean isEqual(Task other) {
@@ -44,24 +44,34 @@ public final class LaunchPrepSubtask extends Task {
 		switch (step) {
 			case OXYGEN_AND_SUIT:
 				if (player != null && !RocketHelper.hasOxygenGear(player)) {
-					LOGGER.info("Moon launch prep: missing oxygen gear — waiting/gathering");
-					break;
+					if (gatherTask == null || gatherTask.isFinished()) {
+						gatherTask = new com.ezquest.astralclef.tasks.gather.GatherTask("ad_astra:oxygen_tank", 1);
+						LOGGER.info("Moon launch prep: delegating to GatherTask for oxygen gear");
+					}
+					return gatherTask;
 				}
+				gatherTask = null;
 				step = Step.ROCKET_ASSEMBLY;
 				break;
 			case ROCKET_ASSEMBLY:
 				if (player != null && !RocketHelper.hasRocket(player, AdAstraRoutes.Destination.MOON)) {
-					LOGGER.info("Moon launch prep: missing {} — gather/craft T2 rocket",
-							RocketHelper.rocketIdFor(AdAstraRoutes.Destination.MOON));
-					break;
+					if (gatherTask == null || gatherTask.isFinished()) {
+						gatherTask = new com.ezquest.astralclef.tasks.gather.GatherTask(
+								RocketHelper.rocketIdFor(AdAstraRoutes.Destination.MOON), 1);
+					}
+					return gatherTask;
 				}
+				gatherTask = null;
 				step = Step.FUEL_AND_PAD;
 				break;
 			case FUEL_AND_PAD:
 				if (player != null && !RocketHelper.hasFuel(player)) {
-					LOGGER.info("Moon launch prep: missing fuel — waiting");
-					break;
+					if (gatherTask == null || gatherTask.isFinished()) {
+						gatherTask = new com.ezquest.astralclef.tasks.gather.GatherTask("ad_astra:oil_bucket", 1);
+					}
+					return gatherTask;
 				}
+				gatherTask = null;
 				step = Step.LAUNCH;
 				break;
 			case LAUNCH:
@@ -70,6 +80,9 @@ public final class LaunchPrepSubtask extends Task {
 				break;
 			case DONE:
 				break;
+		}
+		if (gatherTask != null && gatherTask.isFinished()) {
+			gatherTask = null;
 		}
 		return null;
 	}
@@ -89,6 +102,7 @@ public final class LaunchPrepSubtask extends Task {
 
 	@Override
 	protected void onStop(Task interrupt) {
+		gatherTask = null;
 		LOGGER.debug("LaunchPrep stopped at {} (interrupt={})", step, interrupt);
 	}
 

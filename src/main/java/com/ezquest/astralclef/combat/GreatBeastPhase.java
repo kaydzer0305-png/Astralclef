@@ -12,8 +12,9 @@ import org.slf4j.LoggerFactory;
 public class GreatBeastPhase extends Task {
 	private static final Logger LOGGER = LoggerFactory.getLogger("astralclef/combat/beast");
 
-	private enum Step { LOCATE_BEAST, ENGAGE, LOOT, DONE }
+	private enum Step { LOCATE_BEAST, GATHER_WEAPON, ENGAGE, LOOT, DONE }
 	private Step step = Step.LOCATE_BEAST;
+	private Task gatherWeaponTask;
 
 	@Override
 	public boolean isEqual(Task other) {
@@ -30,25 +31,34 @@ public class GreatBeastPhase extends Task {
 	protected Task onTick() {
 		switch (step) {
 			case LOCATE_BEAST:
-				// TODO: locate Great Beast arena/entity — soft Baritone scan when present
 				if (!locateBeast()) {
 					LOGGER.info("Great Beast: no arena located — waiting/scouting");
 					break;
 				}
-				step = Step.ENGAGE;
+				step = Step.GATHER_WEAPON;
 				break;
-			case ENGAGE:
-				// TODO: real combat AI; for now we gate on weapon check
+			case GATHER_WEAPON:
 				var player = firstPlayer();
-				if (player != null && !hasWeapon(player)) {
-					LOGGER.info("Great Beast: no weapon in inventory — gathering");
+				if (player != null && hasWeapon(player)) {
+					gatherWeaponTask = null;
+					step = Step.ENGAGE;
 					break;
 				}
+				if (gatherWeaponTask == null) {
+					gatherWeaponTask = new com.ezquest.astralclef.tasks.gather.GatherTask("minecraft:diamond_sword", 1);
+					LOGGER.info("Great Beast: delegating to GatherTask for weapon");
+				}
+				if (gatherWeaponTask.isFinished()) {
+					gatherWeaponTask = null;
+					step = Step.ENGAGE;
+					break;
+				}
+				return gatherWeaponTask;
+			case ENGAGE:
 				LOGGER.info("Great Beast engage (stub — no combat AI yet, would attack here)");
 				step = Step.LOOT;
 				break;
 			case LOOT:
-				// TODO: verify FTB Quests Ch6 trigger via FtbQuestsHelper
 				step = Step.DONE;
 				break;
 			case DONE:
@@ -92,6 +102,9 @@ public class GreatBeastPhase extends Task {
 
 	@Override
 	protected void onStop(Task interrupt) {
+		// gatherWeaponTask is a TaskRunner-managed subtask; TaskRunner handles its stop
+		// via the returned Task reference. Just clear our handle.
+		gatherWeaponTask = null;
 		LOGGER.debug("GreatBeast stopped at {} (interrupt={})", step, interrupt);
 	}
 
