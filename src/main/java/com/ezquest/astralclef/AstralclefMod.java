@@ -18,10 +18,10 @@ public class AstralclefMod implements ModInitializer {
 		LOGGER.info("Astralclef loaded");
 		CreateRecipeKinds.init();
 		AstralCommands.register();
-		// Advance TaskRunner then Create recipe jobs each server tick.
+		// TaskRunner then Create jobs; executor auto-binds world context from players when needed.
 		ServerTickEvents.END_SERVER_TICK.register(server -> {
 			TaskRunner.getInstance().tick();
-			CreateRecipeExecutor.getInstance().tick();
+			CreateRecipeExecutor.getInstance().tick(server);
 		});
 	}
 }

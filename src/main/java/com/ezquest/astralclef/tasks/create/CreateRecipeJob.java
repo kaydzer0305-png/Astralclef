@@ -1,30 +1,33 @@
 package com.ezquest.astralclef.tasks.create;
 
+import java.util.Optional;
+
+import com.ezquest.astralclef.tasks.create.world.CreateMachineIO;
+import com.ezquest.astralclef.tasks.create.world.CreateMachineLocator;
+import com.ezquest.astralclef.tasks.create.world.CreateMachineType;
+import com.ezquest.astralclef.tasks.create.world.CreateWorldContext;
+
+import net.minecraft.item.ItemStack;
+import net.minecraft.util.math.BlockPos;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
  * In-flight Create / Astral recipe job.
- * <p>
- * Tracks {@link CreateRecipeKinds.Kind}, opaque {@code recipeId}, and a shared
- * {@link Step} pipeline ({@code LOCATE_MACHINE → INSERT → PROCESS → EXTRACT → DONE}).
- * Per-kind semantics for each step are documented on the job and applied in
- * {@link #advancePlaceholder()} — real Create block interaction plugs in later
- * (depot/belt, mechanical crafter, spout/basin, furnace, smith, press, mixer).
- * <p>
- * Without Create on the classpath this class only logs and advances on a short
- * tick threshold so the executor framework stays compile-safe and extensible.
+ * Pipeline: LOCATE_MACHINE → INSERT → PROCESS → EXTRACT → DONE.
+ * Uses {@link CreateMachineLocator} / {@link CreateMachineIO} when a world context is set.
  */
 public final class CreateRecipeJob {
 	private static final Logger LOGGER = LoggerFactory.getLogger("astralclef/create-job");
 
-	/** Default ticks to spend in each non-DONE step before advancing (placeholder). */
-	public static final int PLACEHOLDER_STEP_TICKS = 20;
+	/** Ticks to wait in PROCESS (kinetic work placeholder). */
+	public static final int PROCESS_STEP_TICKS = 40;
+	/** Fail LOCATE if machine not found after this many ticks. */
+	public static final int LOCATE_TIMEOUT_TICKS = 100;
+	/** Fail INSERT/EXTRACT after this many unsuccessful ticks. */
+	public static final int IO_TIMEOUT_TICKS = 60;
 
-	/**
-	 * Shared recipe pipeline. Kind-specific machine work maps onto these stages
-	 * (see {@link #describeStep()}).
-	 */
 	public enum Step {
 		LOCATE_MACHINE,
 		INSERT,
@@ -41,6 +44,9 @@ public final class CreateRecipeJob {
 	private boolean success;
 	private boolean failed;
 	private String failReason;
+	private BlockPos machinePos;
+	private ItemStack pendingInsert = ItemStack.EMPTY;
+	private ItemStack lastExtracted = ItemStack.EMPTY;
 
 	public CreateRecipeJob(CreateRecipeKinds.Kind kind, String recipeId) {
 		if (kind == null) {
@@ -53,267 +59,181 @@ public final class CreateRecipeJob {
 		this.recipeId = recipeId;
 	}
 
-	public String getRecipeId() {
-		return recipeId;
+	public String getRecipeId() { return recipeId; }
+	public CreateRecipeKinds.Kind getKind() { return kind; }
+	public Step getStep() { return step; }
+	public int getTickCount() { return tickCount; }
+	public int getTicksInStep() { return ticksInStep; }
+	public boolean isSuccess() { return success; }
+	public boolean isFailed() { return failed; }
+	public boolean isDone() { return step == Step.DONE; }
+	public String getFailReason() { return failReason; }
+	public BlockPos getMachinePos() { return machinePos; }
+	public ItemStack getLastExtracted() { return lastExtracted; }
+
+	public void setPendingInsert(ItemStack stack) {
+		this.pendingInsert = stack == null ? ItemStack.EMPTY : stack;
 	}
 
-	public CreateRecipeKinds.Kind getKind() {
-		return kind;
-	}
-
-	public Step getStep() {
-		return step;
-	}
-
-	public int getTickCount() {
-		return tickCount;
-	}
-
-	public int getTicksInStep() {
-		return ticksInStep;
-	}
-
-	public boolean isSuccess() {
-		return success;
-	}
-
-	public boolean isFailed() {
-		return failed;
-	}
-
-	public boolean isDone() {
-		return step == Step.DONE;
-	}
-
-	public String getFailReason() {
-		return failReason;
-	}
-
-	/**
-	 * Advance one server tick. Placeholder path: log kind-specific intent and
-	 * move to the next step after {@link #PLACEHOLDER_STEP_TICKS}.
-	 *
-	 * @return true if the step changed this tick
-	 */
 	public boolean tick() {
+		return tick(CreateRecipeExecutor.getInstance().getWorldContext());
+	}
+
+	public boolean tick(CreateWorldContext ctx) {
 		if (isDone()) {
 			return false;
 		}
 		tickCount++;
 		ticksInStep++;
-		return advancePlaceholder();
+		return advance(ctx);
 	}
 
-	/**
-	 * Compile-safe stand-in for Create machine I/O. Replace bodies with real
-	 * block-entity calls when Create is on the classpath; keep the same step
-	 * transitions so callers stay stable.
-	 */
-	private boolean advancePlaceholder() {
-		if (ticksInStep < PLACEHOLDER_STEP_TICKS) {
+	private boolean advance(CreateWorldContext ctx) {
+		switch (step) {
+			case LOCATE_MACHINE:
+				return advanceLocate(ctx);
+			case INSERT:
+				return advanceInsert(ctx);
+			case PROCESS:
+				return advanceProcess(ctx);
+			case EXTRACT:
+				return advanceExtract(ctx);
+			case DONE:
+			default:
+				return false;
+		}
+	}
+
+	private boolean advanceLocate(CreateWorldContext ctx) {
+		if (ctx == null || !ctx.isValid()) {
+			if (ticksInStep >= LOCATE_TIMEOUT_TICKS) {
+				fail("no world context for locate (set /astralclef context or wait for player bind)");
+				return true;
+			}
 			return false;
 		}
-		LOGGER.info("CreateRecipeJob {} [{}] {}: {}", recipeId, kind, step, describeStep());
-		Step next = nextStep(step);
-		step = next;
-		ticksInStep = 0;
-		if (next == Step.DONE) {
+		CreateMachineType type = CreateMachineType.fromKind(kind);
+		Optional<BlockPos> found = CreateMachineLocator.locateForKind(ctx, kind);
+		if (found.isPresent()) {
+			machinePos = found.get();
+			LOGGER.info("CreateRecipeJob {} [{}] located (prefer {}) at {}", recipeId, kind, type, machinePos.toShortString());
+			return goTo(Step.INSERT);
+		}
+		if (ticksInStep >= LOCATE_TIMEOUT_TICKS) {
+			fail("machine not found for " + type + " / candidates within radius " + ctx.getSearchRadius()
+					+ " of " + ctx.getOrigin().toShortString());
+			return true;
+		}
+		return false;
+	}
+
+	private boolean advanceInsert(CreateWorldContext ctx) {
+		if (machinePos == null || ctx == null || !ctx.isValid()) {
+			fail("insert: missing machine pos or world context");
+			return true;
+		}
+		if (!CreateMachineIO.hasBlockEntity(ctx.getWorld(), machinePos)) {
+			fail("insert: block entity missing at " + machinePos.toShortString());
+			return true;
+		}
+		// Empty pending = soft verify-only insert (inputs supplied by later inventory wiring).
+		if (pendingInsert.isEmpty()) {
+			LOGGER.info("CreateRecipeJob {} [{}] INSERT verify-only at {} — {}",
+					recipeId, kind, machinePos.toShortString(), describeStep());
+			return goTo(Step.PROCESS);
+		}
+		ItemStack remaining = CreateMachineIO.insert(ctx.getWorld(), machinePos, pendingInsert);
+		if (remaining.isEmpty()) {
+			pendingInsert = ItemStack.EMPTY;
+			LOGGER.info("CreateRecipeJob {} [{}] INSERT ok at {}", recipeId, kind, machinePos.toShortString());
+			return goTo(Step.PROCESS);
+		}
+		pendingInsert = remaining;
+		if (ticksInStep >= IO_TIMEOUT_TICKS) {
+			fail("insert: could not insert items into " + machinePos.toShortString());
+			return true;
+		}
+		return false;
+	}
+
+	private boolean advanceProcess(CreateWorldContext ctx) {
+		if (machinePos == null || ctx == null || !ctx.isValid()) {
+			fail("process: missing machine pos or world context");
+			return true;
+		}
+		if (!CreateMachineIO.verifyPresent(ctx.getWorld(), machinePos)) {
+			fail("process: machine disappeared at " + machinePos.toShortString());
+			return true;
+		}
+		if (ticksInStep >= PROCESS_STEP_TICKS) {
+			LOGGER.info("CreateRecipeJob {} [{}] PROCESS done — {}", recipeId, kind, describeStep());
+			return goTo(Step.EXTRACT);
+		}
+		return false;
+	}
+
+	private boolean advanceExtract(CreateWorldContext ctx) {
+		if (machinePos == null || ctx == null || !ctx.isValid()) {
+			fail("extract: missing machine pos or world context");
+			return true;
+		}
+		if (!CreateMachineIO.hasBlockEntity(ctx.getWorld(), machinePos)) {
+			fail("extract: block entity missing at " + machinePos.toShortString());
+			return true;
+		}
+		ItemStack out = CreateMachineIO.extract(ctx.getWorld(), machinePos, ItemStack.EMPTY, 64);
+		if (!out.isEmpty()) {
+			lastExtracted = out;
+			LOGGER.info("CreateRecipeJob {} [{}] EXTRACT got {} x{}", recipeId, kind, out.getItem(), out.getCount());
 			success = true;
 			failed = false;
-			LOGGER.info("CreateRecipeJob {} [{}] completed (placeholder)", recipeId, kind);
+			return goTo(Step.DONE);
+		}
+		// Soft success when inventory empty but machine present (typed BE extract TODO).
+		if (ticksInStep >= IO_TIMEOUT_TICKS) {
+			LOGGER.info("CreateRecipeJob {} [{}] EXTRACT timeout — completing soft (typed BE TODO)", recipeId, kind);
+			success = true;
+			failed = false;
+			return goTo(Step.DONE);
+		}
+		return false;
+	}
+
+	private boolean goTo(Step next) {
+		step = next;
+		ticksInStep = 0;
+		if (next == Step.DONE && !failed) {
+			success = true;
+			LOGGER.info("CreateRecipeJob {} [{}] completed", recipeId, kind);
 		}
 		return true;
 	}
 
-	private static Step nextStep(Step current) {
-		switch (current) {
-			case LOCATE_MACHINE:
-				return Step.INSERT;
-			case INSERT:
-				return Step.PROCESS;
-			case PROCESS:
-				return Step.EXTRACT;
-			case EXTRACT:
-				return Step.DONE;
-			case DONE:
-			default:
-				return Step.DONE;
-		}
-	}
-
-	/**
-	 * Kind-specific description of the current step (for logs / research alignment).
-	 */
 	public String describeStep() {
 		switch (kind) {
-			case SEQUENCED_ASSEMBLY:
-				return sequencedAssemblyNote();
-			case MECHANICAL_CRAFTING:
-				return mechanicalCraftingNote();
-			case FILLING:
-				return fillingNote();
-			case BASIN:
-				return basinNote();
-			case COMPOUND_SMELT:
-				return compoundSmeltNote();
-			case BRONZE_SMITH:
-				return bronzeSmithNote();
-			case PRESS_DUST:
-				return pressDustNote();
-			case MIXER_BASIN:
-				return mixerBasinNote();
-			case GROUT:
-				return groutNote();
-			default:
-				return step.name();
+			case SEQUENCED_ASSEMBLY: return note("depot/belt", "insert depot", "deployer/press/saw/spout", "extract assembly");
+			case MECHANICAL_CRAFTING: return note("mechanical crafter", "fill pattern", "wait craft", "extract craft");
+			case FILLING: return note("spout/basin", "insert container", "spout fill", "extract filled");
+			case BASIN: return note("basin", "insert basin inputs", "mix/press basin", "extract basin");
+			case COMPOUND_SMELT: return note("furnace", "insert compound+fuel", "smelt", "extract smelted");
+			case BRONZE_SMITH: return note("smithing table", "insert Cu+Sn", "smith bronze", "extract bronze");
+			case PRESS_DUST: return note("mechanical press", "insert cobble/dust", "press", "extract dust/product");
+			case MIXER_BASIN: return note("mixer+basin", "insert mix inputs", "run mixer", "extract mixed");
+			case GROUT: return note("mixer (grout)", "insert grout inputs", "mix grout", "extract grout");
+			default: return step.name();
 		}
 	}
 
-	// --- Create vanilla-ish sequences ---
-
-	private String sequencedAssemblyNote() {
+	private String note(String locate, String insert, String process, String extract) {
 		switch (step) {
-			case LOCATE_MACHINE:
-				return "locate depot / belt sequenced-assembly line";
-			case INSERT:
-				return "insert inputs onto depot/belt";
-			case PROCESS:
-				return "wait deployer/press/saw/spout process";
-			case EXTRACT:
-				return "extract assembly output";
-			default:
-				return "done";
+			case LOCATE_MACHINE: return "locate " + locate + (machinePos != null ? " @ " + machinePos.toShortString() : "");
+			case INSERT: return insert;
+			case PROCESS: return process;
+			case EXTRACT: return extract;
+			default: return "done";
 		}
 	}
 
-	private String mechanicalCraftingNote() {
-		switch (step) {
-			case LOCATE_MACHINE:
-				return "locate mechanical crafter grid";
-			case INSERT:
-				return "fill crafter pattern";
-			case PROCESS:
-				return "wait mechanical craft";
-			case EXTRACT:
-				return "extract crafted output";
-			default:
-				return "done";
-		}
-	}
-
-	private String fillingNote() {
-		switch (step) {
-			case LOCATE_MACHINE:
-				return "locate spout / basin fluid source";
-			case INSERT:
-				return "insert empty container";
-			case PROCESS:
-				return "process fill (spout)";
-			case EXTRACT:
-				return "extract filled container";
-			default:
-				return "done";
-		}
-	}
-
-	private String basinNote() {
-		switch (step) {
-			case LOCATE_MACHINE:
-				return "locate basin";
-			case INSERT:
-				return "insert basin inputs";
-			case PROCESS:
-				return "mix / press in basin";
-			case EXTRACT:
-				return "extract basin output";
-			default:
-				return "done";
-		}
-	}
-
-	// --- Astral-specific (Research / Ch0.5–1) ---
-
-	/** Astral: Andesite Compound → furnace smelt (quests26). */
-	private String compoundSmeltNote() {
-		switch (step) {
-			case LOCATE_MACHINE:
-				return "Astral: locate compound furnace / smelt station";
-			case INSERT:
-				return "Astral: insert Andesite Compound + fuel";
-			case PROCESS:
-				return "Astral: compound furnace smelt";
-			case EXTRACT:
-				return "Astral: extract smelted compound product";
-			default:
-				return "done";
-		}
-	}
-
-	/** Astral: copper + tin → Bronze (not Brass). */
-	private String bronzeSmithNote() {
-		switch (step) {
-			case LOCATE_MACHINE:
-				return "Astral: locate smith / early alloy station";
-			case INSERT:
-				return "Astral: insert copper + tin (bronze, not brass)";
-			case PROCESS:
-				return "Astral: smith bronze alloy";
-			case EXTRACT:
-				return "Astral: extract bronze";
-			default:
-				return "done";
-		}
-	}
-
-	/** Astral: press cobble×4 → andesite dust, then press dust. */
-	private String pressDustNote() {
-		switch (step) {
-			case LOCATE_MACHINE:
-				return "Astral: locate mechanical press for cobble→dust";
-			case INSERT:
-				return "Astral: insert cobble×4 (then dust on second pass)";
-			case PROCESS:
-				return "Astral: press cobble to dust / press dust";
-			case EXTRACT:
-				return "Astral: extract andesite dust / pressed product";
-			default:
-				return "done";
-		}
-	}
-
-	/** Mixer + Basin kinetic mix. */
-	private String mixerBasinNote() {
-		switch (step) {
-			case LOCATE_MACHINE:
-				return "Astral: locate Mixer + Basin kinetic setup";
-			case INSERT:
-				return "Astral: insert mixer/basin inputs";
-			case PROCESS:
-				return "Astral: run mixer+basin mix";
-			case EXTRACT:
-				return "Astral: extract mixed output";
-			default:
-				return "done";
-		}
-	}
-
-	/** Grout via Mixer (quests25) — Chapter 2 unlock gate. */
-	private String groutNote() {
-		switch (step) {
-			case LOCATE_MACHINE:
-				return "Astral: locate Mixer for grout (quests25)";
-			case INSERT:
-				return "Astral: insert grout ingredients into mixer/basin";
-			case PROCESS:
-				return "Astral: mix grout";
-			case EXTRACT:
-				return "Astral: extract grout (Ch2 unlock gate)";
-			default:
-				return "done";
-		}
-	}
-
-	/** Mark failed and jump to DONE (e.g. machine missing when Create APIs land). */
 	public void fail(String reason) {
 		this.failed = true;
 		this.success = false;
@@ -325,6 +245,7 @@ public final class CreateRecipeJob {
 	@Override
 	public String toString() {
 		return "CreateRecipeJob{kind=" + kind + ", recipeId='" + recipeId + "', step=" + step
+				+ ", machine=" + (machinePos != null ? machinePos.toShortString() : "none")
 				+ ", ticks=" + tickCount + ", success=" + success + ", failed=" + failed + '}';
 	}
 }

@@ -3,17 +3,20 @@ package com.ezquest.astralclef.command;
 import com.ezquest.astralclef.AstralclefMod;
 import com.ezquest.astralclef.task.Task;
 import com.ezquest.astralclef.task.TaskRunner;
+import com.ezquest.astralclef.tasks.create.CreateRecipeExecutor;
+import com.ezquest.astralclef.tasks.create.world.CreateWorldContext;
 import com.ezquest.astralclef.tasks.phases.Ch01GettingStartedTask;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.context.CommandContext;
 import net.fabricmc.fabric.api.command.v1.CommandRegistrationCallback;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
+import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.LiteralText;
 
 /**
- * Registers {@code /astralclef} commands that drive {@link TaskRunner}.
- * {@code /astralclef ch01} starts the Ch0.5–1 Create loop.
+ * Registers {@code /astralclef} commands that drive {@link TaskRunner} and Create world context.
  */
 public final class AstralCommands {
 	private AstralCommands() {}
@@ -34,6 +37,8 @@ public final class AstralCommands {
 								.executes(AstralCommands::cancel))
 						.then(CommandManager.literal("status")
 								.executes(AstralCommands::status))
+						.then(CommandManager.literal("context")
+								.executes(AstralCommands::setContext))
 						.then(CommandManager.literal("tick")
 								.executes(AstralCommands::manualTick)));
 	}
@@ -54,17 +59,37 @@ public final class AstralCommands {
 
 	private static int status(CommandContext<ServerCommandSource> ctx) {
 		Task task = TaskRunner.getInstance().getUserTask();
-		String msg = task == null ? "idle" : task.toString();
-		ctx.getSource().sendFeedback(new LiteralText("Astralclef: " + msg), false);
+		String taskMsg = task == null ? "idle" : task.toString();
+		String createMsg = CreateRecipeExecutor.getInstance().statusSummary();
+		ctx.getSource().sendFeedback(new LiteralText("Astralclef task: " + taskMsg), false);
+		ctx.getSource().sendFeedback(new LiteralText("Create: " + createMsg), false);
 		return 1;
 	}
 
-	/** Manual tick for stub testing before a server-tick hook is always on. */
+	/** Bind Create locate context to the executing player world + block pos. */
+	private static int setContext(CommandContext<ServerCommandSource> ctx) {
+		ServerCommandSource src = ctx.getSource();
+		ServerPlayerEntity player;
+		try {
+			player = src.getPlayer();
+		} catch (Exception e) {
+			src.sendError(new LiteralText("Astralclef context requires a player"));
+			return 0;
+		}
+		ServerWorld world = (ServerWorld) player.getWorld();
+		CreateRecipeExecutor.getInstance().setWorldContext(
+				world, player.getBlockPos(), CreateWorldContext.DEFAULT_SEARCH_RADIUS);
+		src.sendFeedback(new LiteralText("Astralclef context: " + CreateRecipeExecutor.getInstance().getWorldContext()), true);
+		return 1;
+	}
+
 	private static int manualTick(CommandContext<ServerCommandSource> ctx) {
 		TaskRunner.getInstance().tick();
+		CreateRecipeExecutor.getInstance().tick(ctx.getSource().getServer());
 		Task task = TaskRunner.getInstance().getUserTask();
 		String msg = task == null ? "idle (finished or none)" : task.toString();
 		ctx.getSource().sendFeedback(new LiteralText("Astralclef tick → " + msg), false);
+		ctx.getSource().sendFeedback(new LiteralText(CreateRecipeExecutor.getInstance().statusSummary()), false);
 		return 1;
 	}
 }
