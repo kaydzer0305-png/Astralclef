@@ -64,11 +64,31 @@ public final class AstralQuests {
 	/** Ch3 — electrolyser (Ad Astra O2). */
 	public static final String CH3_ELECTROLYSER = "343B8B2BF76B1D3B";
 
-	// --- Chapters 4/5 (Mars/Mercury) — file ids; quest lists mirror 6.snbt pattern, parse key gates on demand ---
+	// --- Chapter 4 (Mars — T2 rocket → Mars dimension) ---
 	/** Chapter 4 file id (Mars). */
-	public static final String CHAPTER_4 = "E1FF6BCB73E5DAF41F208E48AB94E46BD75322F0";
-	/** Chapter 5 file id (Mercury). */
+	public static final String CHAPTER_4 = "1A12E870F117B0D1";
+	/** Ch4 file id legacy (alt key seen in chapter_4.snbt header variants). */
+	public static final String CHAPTER_4_ALT = "E1FF6BCB73E5DAF41F208E48AB94E46BD75322F0";
+	/** Ch4 — T2 rocket craft (ad_astra:tier_2_rocket, size 5, gated behind 6 quests). */
+	public static final String CH4_T2_ROCKET = "6E20B194F5CA8F22";
+	/** Ch4 — Mars dimension entry (ad_astra:mars). */
+	public static final String CH4_MARS_DIMENSION = "63DCF596AAA9A232";
+	/** Ch4 — launch pad ×2. */
+	public static final String CH4_LAUNCH_PAD = "44D51F142E9E8902";
+	/** Ch4 — oxygen distributor. */
+	public static final String CH4_OXYGEN_DISTRIBUTOR = "47A155F9CAD19710";
+	/** Ch4 — desh nugget / raw desh (moon ore). */
+	public static final String CH4_DESH = "7909A5A0E194C800";
+
+	// --- Chapter 5 (Glacio / Mercury — cryo fuel → Glacio dimension) ---
+	/** Chapter 5 file id (Glacio/Mercury). */
 	public static final String CHAPTER_5 = "803CA4AE2C5AFA1084D2CC5BC598DC9C84C54034";
+	/** Ch5 — Glacio dimension entry (ad_astra:glacio, the Mercury analogue in Ad Astra). */
+	public static final String CH5_GLACIO_DIMENSION = "111E91837243077C";
+	/** Ch5 — cryo fuel bucket. */
+	public static final String CH5_CRYO_FUEL = "3F21FC19DD9459EF";
+	/** Ch5 — cryo freezer. */
+	public static final String CH5_CRYO_FREEZER = "562D93203A0A135A";
 
 	/** All Chapter 6 quest ids (useful for progress % in status). */
 	public static final String[] CHAPTER_6_ALL = {
