@@ -10,6 +10,7 @@ import java.util.Objects;
 import java.util.Optional;
 
 import com.ezquest.astralclef.recipes.Ch01RecipeBindings;
+import com.ezquest.astralclef.tasks.create.world.CreateBlockEntityIO;
 import com.ezquest.astralclef.tasks.create.world.CreateWorldContext;
 
 import net.minecraft.item.ItemStack;

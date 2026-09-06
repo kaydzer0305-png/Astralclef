@@ -24,8 +24,10 @@ import org.slf4j.LoggerFactory;
  * Prefers typed Create BE I/O via {@link CreateBlockEntityIO} (Basin / Depot / Crafter / …),
  * then Fabric Transfer {@link ItemStorage}, then {@link Inventory}.
  * <p>
- * Fluid path: basin {@code inputTank}/{@code outputTank} + Fabric {@code Storage&lt;FluidVariant&gt;}
- * for {@code kubejs:compound_mixture}. Kinetic: mixer/press {@link CreateBlockEntityIO#readKineticState}.
+ * Fluid path: basin {@code inputTank}/{@code outputTank} + generic Transfer
+ * (spout included) for {@code kubejs:compound_mixture}.
+ * Kinetic: mixer/press {@link CreateBlockEntityIO#readKineticState} with
+ * {@link CreateBlockEntityIO#MIN_KINETIC_SPEED} floor.
  */
 public final class CreateMachineIO {
 	private static final Logger LOGGER = LoggerFactory.getLogger("astralclef/create-io");
@@ -157,7 +159,7 @@ public final class CreateMachineIO {
 		if (typed.isPresent()) {
 			return typed.get();
 		}
-		LOGGER.warn("insertFluid: no basin fluid path at {} for {}", pos.toShortString(), fluidId);
+		LOGGER.warn("insertFluid: no fluid path at {} for {}", pos.toShortString(), fluidId);
 		return amount;
 	}
 
@@ -179,6 +181,123 @@ public final class CreateMachineIO {
 
 	public static long basinFluidAmount(ServerWorld world, BlockPos pos, Identifier fluidId) {
 		return CreateBlockEntityIO.getBasinFluidAmount(world, pos, fluidId).orElse(0L);
+	}
+
+	/** Generic fluid amount (basin tanks or any Transfer storage, e.g. spout). */
+	public static long fluidAmount(ServerWorld world, BlockPos pos, Identifier fluidId) {
+		return CreateBlockEntityIO.getFluidAmount(world, pos, fluidId).orElse(0L);
+	}
+
+	public static boolean hasFluid(ServerWorld world, BlockPos pos, Identifier fluidId) {
+		return fluidAmount(world, pos, fluidId) > 0L;
+	}
+
+	/** Best-effort basin filter write; false when no FilteringBehaviour path. */
+	public static boolean setBasinFilter(ServerWorld world, BlockPos pos, ItemStack filter) {
+		if (world == null || pos == null) {
+			return false;
+		}
+		return CreateBlockEntityIO.setBasinFilter(world.getBlockEntity(pos), filter);
+	}
+
+	/**
+	 * Distribute ordered inputs across a mechanical crafter group for shaped recipes.
+	 * @return per-slot remaining stacks
+	 */
+	public static java.util.List<ItemStack> insertCrafterGroup(
+			ServerWorld world, BlockPos center, java.util.List<ItemStack> inputs) {
+		return CreateBlockEntityIO.insertCrafterGroup(world, center, inputs);
+	}
+
+	/** True when the block at pos is a vanilla smithing table (no BE inventory). */
+	public static boolean isSmithingTable(ServerWorld world, BlockPos pos) {
+		if (world == null || pos == null) {
+			return false;
+		}
+		try {
+			Identifier id = net.minecraft.util.registry.Registry.BLOCK.getId(world.getBlockState(pos).getBlock());
+			return new Identifier("minecraft", "smithing_table").equals(id);
+		} catch (Throwable t) {
+			return false;
+		}
+	}
+
+	/** True when the block at pos is a vanilla crafting table (no BE inventory). */
+	public static boolean isCraftingTable(ServerWorld world, BlockPos pos) {
+		if (world == null || pos == null) {
+			return false;
+		}
+		try {
+			Identifier id = net.minecraft.util.registry.Registry.BLOCK.getId(world.getBlockState(pos).getBlock());
+			return new Identifier("minecraft", "crafting_table").equals(id);
+		} catch (Throwable t) {
+			return false;
+		}
+	}
+
+	/**
+	 * Furnace cooking snapshot for COMPOUND_SMELT progress polling.
+	 * Uses vanilla {@code AbstractFurnaceBlockEntity} fields when available.
+	 */
+	public static final class FurnaceProgress {
+		public final boolean isFurnace;
+		public final boolean lit;
+		public final int cookTime;
+		public final int cookTimeTotal;
+		public final boolean outputPresent;
+
+		public FurnaceProgress(boolean isFurnace, boolean lit, int cookTime, int cookTimeTotal, boolean outputPresent) {
+			this.isFurnace = isFurnace;
+			this.lit = lit;
+			this.cookTime = cookTime;
+			this.cookTimeTotal = cookTimeTotal;
+			this.outputPresent = outputPresent;
+		}
+
+		@Override
+		public String toString() {
+			return "FurnaceProgress{furnace=" + isFurnace + ", lit=" + lit
+					+ ", cook=" + cookTime + "/" + cookTimeTotal + ", out=" + outputPresent + "}";
+		}
+	}
+
+	public static FurnaceProgress readFurnace(ServerWorld world, BlockPos pos, ItemStack expectedOutput) {
+		if (world == null || pos == null) {
+			return new FurnaceProgress(false, false, 0, 0, false);
+		}
+		BlockEntity be = world.getBlockEntity(pos);
+		if (!(be instanceof net.minecraft.block.entity.AbstractFurnaceBlockEntity furnace)) {
+			return new FurnaceProgress(false, false, 0, 0, false);
+		}
+		boolean lit = false;
+		try {
+			lit = world.getBlockState(pos).get(net.minecraft.block.AbstractFurnaceBlock.LIT);
+		} catch (Throwable t) {
+			lit = false;
+		}
+		int cook = 0;
+		int total = 0;
+		try {
+			// Yarn 1.18.2: fields cookTime / cookTimeTotal are protected; use inventory + getters via reflection
+			java.lang.reflect.Field f = net.minecraft.block.entity.AbstractFurnaceBlockEntity.class.getDeclaredField("cookTime");
+			f.setAccessible(true);
+			cook = f.getInt(furnace);
+			java.lang.reflect.Field t2 = net.minecraft.block.entity.AbstractFurnaceBlockEntity.class.getDeclaredField("cookTimeTotal");
+			t2.setAccessible(true);
+			total = t2.getInt(furnace);
+		} catch (Throwable t) {
+			LOGGER.debug("readFurnace cookTime reflection: {}", t.toString());
+		}
+		boolean out = false;
+		try {
+			ItemStack outStack = furnace.getStack(2);
+			out = outStack != null && !outStack.isEmpty()
+					&& (expectedOutput == null || expectedOutput.isEmpty()
+						|| ItemStack.areItemsEqual(expectedOutput, outStack));
+		} catch (Throwable t) {
+			out = false;
+		}
+		return new FurnaceProgress(true, lit, cook, total, out);
 	}
 
 	private static ItemStack insertTransfer(ServerWorld world, BlockPos pos, ItemStack stack) {
@@ -219,7 +338,7 @@ public final class CreateMachineIO {
 				return ItemStack.EMPTY;
 			}
 			try (Transaction tx = Transaction.openOuter()) {
-				for (StorageView<ItemVariant> view : storage) {
+				for (StorageView<ItemVariant> view : storage.iterable(tx)) {
 					if (view.isResourceBlank()) {
 						continue;
 					}

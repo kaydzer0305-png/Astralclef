@@ -195,9 +195,71 @@ public final class CreateRecipeJob {
 			fail("insert: missing machine pos or world context");
 			return true;
 		}
+		// Smithing table / crafting table have no BE inventory — fail fast with actionable hint
+		// instead of burning IO_TIMEOUT_TICKS on an impossible insert.
+		if (kind == CreateRecipeKinds.Kind.BRONZE_SMITH
+				&& CreateMachineIO.isSmithingTable(ctx.getWorld(), machinePos)) {
+			fail("insert: smithing table at " + machinePos.toShortString()
+					+ " has no BE inventory — smith bronze via player UI (Cu+Sn) or route through a modded crafter");
+			return true;
+		}
+		if (kind == CreateRecipeKinds.Kind.MECHANICAL_CRAFTING
+				&& CreateMachineIO.isCraftingTable(ctx.getWorld(), machinePos)) {
+			LOGGER.info("CreateRecipeJob {} [{}] crafting table at {} has no BE — verify-only craft",
+					recipeId, kind, machinePos.toShortString());
+			return goTo(Step.PROCESS);
+		}
 		if (!CreateMachineIO.hasBlockEntity(ctx.getWorld(), machinePos)) {
 			fail("insert: block entity missing at " + machinePos.toShortString());
 			return true;
+		}
+		// Basin filter write (best-effort): set expected output as filter before inserting,
+		// so basin recipes with filters don't stall. Failure only logs.
+		if (!expectedOutput.isEmpty()) {
+			switch (kind) {
+				case BASIN:
+				case MIXER_BASIN:
+				case GROUT:
+					CreateMachineIO.setBasinFilter(ctx.getWorld(), machinePos, expectedOutput);
+					break;
+				default:
+					break;
+			}
+		}
+		// Mechanical crafter shaped recipes: distribute ordered inputs across the 3x3 group
+		// in one tick instead of stuffing everything into a single crafter slot.
+		if (kind == CreateRecipeKinds.Kind.MECHANICAL_CRAFTING && !bindingInputs.isEmpty()) {
+			java.util.List<ItemStack> wanted = new java.util.ArrayList<>();
+			for (ItemStack s : bindingInputs) {
+				if (s != null && !s.isEmpty()) {
+					wanted.add(s.copy());
+				}
+			}
+			if (!wanted.isEmpty()) {
+				java.util.List<ItemStack> leftover = CreateMachineIO.insertCrafterGroup(
+						ctx.getWorld(), machinePos, wanted);
+				boolean allEmpty = true;
+				for (ItemStack r : leftover) {
+					if (r != null && !r.isEmpty()) {
+						allEmpty = false;
+						break;
+					}
+				}
+				if (allEmpty) {
+					LOGGER.info("CreateRecipeJob {} [{}] INSERT crafter-group ok ({} slots) at {}",
+							recipeId, kind, wanted.size(), machinePos.toShortString());
+					pendingInsert = ItemStack.EMPTY;
+					bindingInputIndex = bindingInputs.size();
+					return goTo(Step.PROCESS);
+				}
+				if (ticksInStep >= IO_TIMEOUT_TICKS) {
+					fail("insert: crafter group still has " + leftover.size()
+							+ " leftover slot(s) at " + machinePos.toShortString()
+							+ " — expand the 3x3 grid or clear occupied slots");
+					return true;
+				}
+				return false;
+			}
 		}
 		if (pendingInsert.isEmpty() && bindingInputIndex < bindingInputs.size()) {
 			pendingInsert = bindingInputs.get(bindingInputIndex).copy();
@@ -256,8 +318,30 @@ public final class CreateRecipeJob {
 			return true;
 		}
 
-		// Non-kinetic (furnace / smith / crafting): timed dwell, then EXTRACT
+		// Non-kinetic (furnace / smith / crafting): furnace polls output, others timed dwell.
 		if (!usesKineticProcess()) {
+			if (kind == CreateRecipeKinds.Kind.COMPOUND_SMELT) {
+				CreateMachineIO.FurnaceProgress furnace =
+						CreateMachineIO.readFurnace(ctx.getWorld(), machinePos, expectedOutput);
+				if (furnace.isFurnace) {
+					if (furnace.outputPresent) {
+						LOGGER.info("CreateRecipeJob {} [{}] PROCESS furnace output ready ({}) — {}",
+								recipeId, kind, furnace, describeStep());
+						return goTo(Step.EXTRACT);
+					}
+					if (ticksInStep % 40 == 0) {
+						LOGGER.info("CreateRecipeJob {} [{}] PROCESS furnace waiting ({}) — {}",
+								recipeId, kind, furnace, describeStep());
+					}
+					if (ticksInStep >= Math.max(PROCESS_STEP_TICKS, PROCESS_START_TIMEOUT_TICKS)) {
+						fail("process: furnace at " + machinePos.toShortString()
+								+ " never produced " + expectedOutput.getItem()
+								+ " (" + furnace + ") — check fuel / input / blast vs furnace");
+						return true;
+					}
+					return false;
+				}
+			}
 			if (ticksInStep >= PROCESS_STEP_TICKS) {
 				LOGGER.info("CreateRecipeJob {} [{}] PROCESS dwell done (non-kinetic) — {}",
 						recipeId, kind, describeStep());
@@ -269,7 +353,12 @@ public final class CreateRecipeJob {
 		CreateBlockEntityIO.KineticState kinetic = CreateMachineIO.readKinetic(ctx.getWorld(), machinePos);
 		boolean running = CreateMachineIO.isLikelyProcessing(ctx.getWorld(), machinePos);
 		boolean fluidReady = expectsFluidOutput()
-				&& CreateMachineIO.hasBasinFluid(ctx.getWorld(), machinePos, expectedFluidId);
+				&& CreateMachineIO.hasFluid(ctx.getWorld(), machinePos, expectedFluidId);
+		if (kinetic.known && !kinetic.isSpeedSufficient() && ticksInStep % 40 == 0) {
+			LOGGER.warn("CreateRecipeJob {} [{}] low shaft speed {} < {} RPM at {} — add power / gear up",
+					recipeId, kind, kinetic.speed, CreateBlockEntityIO.MIN_KINETIC_SPEED,
+					machinePos.toShortString());
+		}
 
 		if (running) {
 			if (!sawProcessingStart) {
@@ -295,9 +384,10 @@ public final class CreateRecipeJob {
 
 		if (!sawProcessingStart && ticksInStep >= PROCESS_START_TIMEOUT_TICKS) {
 			fail("process: never started at " + machinePos.toShortString()
-					+ " (speed=" + kinetic.speed + ", running=" + kinetic.running
+					+ " (speed=" + kinetic.speed + " min=" + CreateBlockEntityIO.MIN_KINETIC_SPEED
+					+ ", running=" + kinetic.running
 					+ ", recipe=" + kinetic.hasCurrentRecipe + ", basin=" + kinetic.basinPresent
-					+ ") — check RPM≥32 / ingredients / filter");
+					+ ") — check RPM≥" + (int) CreateBlockEntityIO.MIN_KINETIC_SPEED + " / ingredients / filter");
 			return true;
 		}
 		if (sawProcessingStart && ticksSinceProcessingStart >= PROCESS_COMPLETE_TIMEOUT_TICKS) {

@@ -68,13 +68,25 @@ Package `com.ezquest.astralclef.tasks.create.world`:
 | Pack-id confirm | **Hardened** — `Ch01RecipeBindings.confirmMatched` logs RecipeManager `ResourceLocation`; `/astralclef recipes` dumps Ch01 binds (type+IO bind retained) |
 | Create pin | `create-fabric-1.18.2:0.5.1-f-build.1415+mc1.18.2` |
 
-**Remaining gaps / soft:**
-- Spout fluid fill/drain still soft (`GAP_SPOUT_FLUID`) — basin Transfer preferred for mixture
-- Basin filter **write**; crafter **pattern** encode (grid slots only)
-- Exact pack-local KubeJS auto-ids still unresolved until datapack load (`Ch01RecipeIds` swap hooks)
-- DepotBehaviour / Create package renames when reflection soft-fails
-- Non-kinetic kinds (furnace/smith) still use timed PROCESS dwell
-- Stress/network RPM not modeled beyond `getSpeed()`
+**Remaining gaps / soft (stabilize pass):**
+- Spout fluid via generic Transfer fallback (`tryInsertFluid`/`tryExtractFluid` no longer basin-gated; tank path stays basin-only) — basin Transfer still preferred for mixture
+- Basin filter **write** via `setBasinFilter` (FilteringBehaviour `setFilter`/field, best-effort; auto-applied before basin INSERT when expected output known)
+- Crafter **group** insert via `insertCrafterGroup` (3x3 crafters around locate pos, recipe-order distribute for BBB/AAA/CCC)
+- Exact pack-local KubeJS auto-ids still unresolved until datapack load (`Ch01RecipeIds` swap hooks; `refresh` on context set/auto-bind)
+- DepotBehaviour rename warns with class name when reflection misses
+- Furnace COMPOUND_SMELT polls `AbstractFurnaceBlockEntity` output/LIT instead of blind dwell; smithing table fails fast (no BE — needs player UI)
+- RPM floor `MIN_KINETIC_SPEED=32` with low-speed warn every 40 ticks (stress/network still not modeled beyond `getSpeed()`)
+
+## Build
+
+```bat
+set JAVA_HOME=C:\Program Files\Eclipse Adoptium\jdk-17.0.19.10-hotspot
+.\gradlew.bat build
+```
+
+Requires JDK 17+. Create resolves from DevOS snapshots (`mvn.devos.one`). Gradle wrapper (`gradle-7.3.3`) is
+checked in via `gradle/wrapper/` + `gradlew.bat`. Loom 1.0.18 pins `create-fabric-1.18.2:0.5.1-f-build.1415+mc1.18.2`.
+Fabric Transfer 1.6.0 (1.18.2) iteration uses `storage.iterable(tx)` with an outer `Transaction`.
 
 ### Ch0.5–1 Create loop (ship order)
 
@@ -97,14 +109,6 @@ Subtasks fire `CreateRecipeKinds` with bind ids and wait for job completion.
 | `/astralclef cancel` | Cancel active task |
 | `/astralclef tick` | Manual TaskRunner + Create executor tick |
 | `/astralclef recipes` | Dump Ch01 binds → resolved RecipeManager pack ids |
-
-## Build
-
-```bash
-./gradlew build
-```
-
-Requires JDK 17+. Create resolves from DevOS snapshots (`mvn.devos.one`).
 
 ## License
 

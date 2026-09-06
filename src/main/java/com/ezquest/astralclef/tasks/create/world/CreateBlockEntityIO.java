@@ -48,17 +48,22 @@ import org.slf4j.LoggerFactory;
  *   <li>{@value #GAP_CRAFTER_PATTERN} — crafter grid slot insert/extract only; pattern encoding TODO</li>
  * </ul>
  * <p>
- * <b>Hardened (Ch01)</b>: basin {@code inputTank}/{@code outputTank} + Fabric
+ * <b>Hardened (Ch01 stabilize)</b>: basin {@code inputTank}/{@code outputTank} + Fabric
  * {@code Storage&lt;FluidVariant&gt;} for {@code kubejs:compound_mixture}; mixer/press
  * kinetic via {@code running}/{@code runningTicks}/{@code processingTicks}/{@code currentRecipe}/
- * {@code getSpeed()}/{@code getBasin()}.
+ * {@code getSpeed()}/{@code getBasin()} with {@link #MIN_KINETIC_SPEED} floor;
+ * spout fluid via generic Transfer fallback ({@link #tryInsertFluid}/{@link #tryExtractFluid}
+ * no longer basin-gated); basin filter write via {@link #setBasinFilter};
+ * mechanical crafter group insert via {@link #insertCrafterGroup}.
  */
 public final class CreateBlockEntityIO {
 	private static final Logger LOGGER = LoggerFactory.getLogger("astralclef/create-be-io");
 
-	public static final String GAP_SPOUT_FLUID = "spout fluid I/O soft — use Fluid Transfer";
-	public static final String GAP_BASIN_FILTER_WRITE = "basin FilteringBehaviour write not implemented";
-	public static final String GAP_CRAFTER_PATTERN = "mechanical crafter pattern encode TODO";
+	public static final String GAP_SPOUT_FLUID = "spout fluid via generic Transfer fallback (tank path basin-only)";
+	public static final String GAP_BASIN_FILTER_WRITE = "basin FilteringBehaviour write via setBasinFilter (best-effort reflection)";
+	public static final String GAP_CRAFTER_PATTERN = "mechanical crafter group insert distributes inputs across 3x3 crafters in recipe order";
+	/** Minimum Create kinetic speed (RPM) expected for mixer/press to make progress. */
+	public static final float MIN_KINETIC_SPEED = 32.0f;
 	/** @deprecated kinetic PROCESS hardened via {@link #readKineticState} / {@link #isLikelyProcessing} */
 	@Deprecated
 	public static final String GAP_KINETIC_PROCESS = "press/mixer process detection best-effort only";
@@ -207,6 +212,11 @@ public final class CreateBlockEntityIO {
 			return false;
 		}
 
+		/** True when shaft speed meets the Create minimum for mixer/press progress. */
+		public boolean isSpeedSufficient() {
+			return Math.abs(speed) >= MIN_KINETIC_SPEED;
+		}
+
 		@Override
 		public String toString() {
 			return "KineticState{known=" + known + ", running=" + running
@@ -302,8 +312,8 @@ public final class CreateBlockEntityIO {
 	// --- Basin fluids (compound_mixture) ---
 
 	/**
-	 * Insert fluid into basin via Fabric Transfer {@code fluidCapability} / sided FluidStorage,
-	 * falling back to reflective {@code inputTank} SmartFluidTankBehaviour.
+	 * Insert fluid into basin (tank + Transfer) or any other BE (generic Transfer fallback,
+	 * e.g. spout). Basin tank path is basin-only; Transfer path applies to spout as well.
 	 * @return empty if no fluid path; otherwise remaining amount (0 = fully inserted)
 	 */
 	public static Optional<Long> tryInsertFluid(ServerWorld world, BlockPos pos, Identifier fluidId, long amount) {
@@ -311,22 +321,31 @@ public final class CreateBlockEntityIO {
 			return Optional.empty();
 		}
 		BlockEntity be = world.getBlockEntity(pos);
-		if (be == null || !isInstanceOfAny(be, BASIN_CLASSES)) {
+		boolean isBasin = be != null && isInstanceOfAny(be, BASIN_CLASSES);
+		if (be != null && isBasin) {
+			long viaTransfer = insertFluidTransfer(world, pos, fluidId, amount);
+			if (viaTransfer >= 0) {
+				long remaining = amount - viaTransfer;
+				LOGGER.info("tryInsertFluid Transfer {} x{} at {} inserted={} remaining={}",
+						fluidId, amount, pos.toShortString(), viaTransfer, remaining);
+				return Optional.of(Math.max(0L, remaining));
+			}
+			long viaTank = insertFluidTankBehaviour(be, fluidId, amount);
+			if (viaTank >= 0) {
+				long remaining = amount - viaTank;
+				invokeNoArg(be, "notifyChangeOfContents");
+				LOGGER.info("tryInsertFluid tank {} x{} at {} inserted={} remaining={}",
+						fluidId, amount, pos.toShortString(), viaTank, remaining);
+				return Optional.of(Math.max(0L, remaining));
+			}
 			return Optional.empty();
 		}
+		// Non-basin (spout / other): generic Transfer only. No BE still allows sided lookup.
 		long viaTransfer = insertFluidTransfer(world, pos, fluidId, amount);
 		if (viaTransfer >= 0) {
 			long remaining = amount - viaTransfer;
-			LOGGER.info("tryInsertFluid Transfer {} x{} at {} inserted={} remaining={}",
+			LOGGER.info("tryInsertFluid Transfer(non-basin) {} x{} at {} inserted={} remaining={}",
 					fluidId, amount, pos.toShortString(), viaTransfer, remaining);
-			return Optional.of(Math.max(0L, remaining));
-		}
-		long viaTank = insertFluidTankBehaviour(be, fluidId, amount);
-		if (viaTank >= 0) {
-			long remaining = amount - viaTank;
-			invokeNoArg(be, "notifyChangeOfContents");
-			LOGGER.info("tryInsertFluid tank {} x{} at {} inserted={} remaining={}",
-					fluidId, amount, pos.toShortString(), viaTank, remaining);
 			return Optional.of(Math.max(0L, remaining));
 		}
 		return Optional.empty();
@@ -334,6 +353,7 @@ public final class CreateBlockEntityIO {
 
 	/**
 	 * Extract fluid from basin output (prefer {@code outputTank}) then Transfer API.
+	 * Non-basin BEs (spout) use generic Transfer fallback.
 	 * @return empty if no fluid path; otherwise amount extracted (may be 0)
 	 */
 	public static Optional<Long> tryExtractFluid(ServerWorld world, BlockPos pos, Identifier fluidId, long maxAmount) {
@@ -341,22 +361,28 @@ public final class CreateBlockEntityIO {
 			return Optional.empty();
 		}
 		BlockEntity be = world.getBlockEntity(pos);
-		if (be == null || !isInstanceOfAny(be, BASIN_CLASSES)) {
+		boolean isBasin = be != null && isInstanceOfAny(be, BASIN_CLASSES);
+		if (isBasin) {
+			long viaTank = extractFluidTankBehaviour(be, fluidId, maxAmount);
+			if (viaTank > 0) {
+				invokeNoArg(be, "notifyChangeOfContents");
+				LOGGER.info("tryExtractFluid tank {} extracted {} at {}", fluidId, viaTank, pos.toShortString());
+				return Optional.of(viaTank);
+			}
+			long viaTransfer = extractFluidTransfer(world, pos, fluidId, maxAmount);
+			if (viaTransfer >= 0) {
+				LOGGER.info("tryExtractFluid Transfer {} extracted {} at {}", fluidId, viaTransfer, pos.toShortString());
+				return Optional.of(viaTransfer);
+			}
+			if (viaTank == 0) {
+				return Optional.of(0L);
+			}
 			return Optional.empty();
-		}
-		long viaTank = extractFluidTankBehaviour(be, fluidId, maxAmount);
-		if (viaTank > 0) {
-			invokeNoArg(be, "notifyChangeOfContents");
-			LOGGER.info("tryExtractFluid tank {} extracted {} at {}", fluidId, viaTank, pos.toShortString());
-			return Optional.of(viaTank);
 		}
 		long viaTransfer = extractFluidTransfer(world, pos, fluidId, maxAmount);
 		if (viaTransfer >= 0) {
-			LOGGER.info("tryExtractFluid Transfer {} extracted {} at {}", fluidId, viaTransfer, pos.toShortString());
+			LOGGER.info("tryExtractFluid Transfer(non-basin) {} extracted {} at {}", fluidId, viaTransfer, pos.toShortString());
 			return Optional.of(viaTransfer);
-		}
-		if (viaTank == 0) {
-			return Optional.of(0L);
 		}
 		return Optional.empty();
 	}
@@ -446,7 +472,7 @@ public final class CreateBlockEntityIO {
 			}
 			try (Transaction tx = Transaction.openOuter()) {
 				long extracted = 0;
-				for (StorageView<FluidVariant> view : storage) {
+				for (StorageView<FluidVariant> view : storage.iterable(tx)) {
 					if (view.isResourceBlank()) {
 						continue;
 					}
@@ -506,8 +532,8 @@ public final class CreateBlockEntityIO {
 
 	private static long sumStorage(Storage<FluidVariant> storage, Identifier fluidId) {
 		long total = 0;
-		try {
-			for (StorageView<FluidVariant> view : storage) {
+		try (Transaction tx = Transaction.openOuter()) {
+			for (StorageView<FluidVariant> view : storage.iterable(tx)) {
 				if (view.isResourceBlank()) {
 					continue;
 				}
@@ -803,8 +829,106 @@ public final class CreateBlockEntityIO {
 		if (filter instanceof ItemStack stack) {
 			return Optional.of(stack);
 		}
-		LOGGER.debug("getBasinFilter: {}", GAP_BASIN_FILTER_WRITE);
 		return Optional.empty();
+	}
+
+	/**
+	 * Best-effort basin filter write via FilteringBehaviour reflection.
+	 * Tries {@code setFilter(ItemStack)} then direct {@code filter} field write.
+	 * @return true when a write path applied (even if filter empty-cleared)
+	 */
+	public static boolean setBasinFilter(BlockEntity be, ItemStack filter) {
+		if (!isInstanceOfAny(be, BASIN_CLASSES)) {
+			return false;
+		}
+		Object filtering = invokeNoArg(be, "getFilter");
+		if (filtering == null) {
+			filtering = readField(be, "filtering");
+		}
+		if (filtering == null) {
+			return false;
+		}
+		ItemStack safe = filter == null ? ItemStack.EMPTY : filter.copy();
+		// Prefer setFilter(ItemStack)
+		try {
+			for (Method m : filtering.getClass().getMethods()) {
+				if (!"setFilter".equals(m.getName()) || m.getParameterCount() != 1) {
+					continue;
+				}
+				if (ItemStack.class.isAssignableFrom(m.getParameterTypes()[0])) {
+					m.setAccessible(true);
+					m.invoke(filtering, safe);
+					invokeNoArg(be, "notifyChangeOfContents");
+					LOGGER.info("setBasinFilter: wrote {} x{}", safe.getItem(), safe.getCount());
+					return true;
+				}
+			}
+		} catch (Throwable t) {
+			LOGGER.debug("setBasinFilter setFilter failed: {}", t.toString());
+		}
+		// Fallback: direct field write on behaviour
+		try {
+			Class<?> c = filtering.getClass();
+			while (c != null) {
+				try {
+					Field f = c.getDeclaredField("filter");
+					f.setAccessible(true);
+					f.set(filtering, safe);
+					invokeNoArg(be, "notifyChangeOfContents");
+					LOGGER.info("setBasinFilter: field-wrote {} x{}", safe.getItem(), safe.getCount());
+					return true;
+				} catch (NoSuchFieldException e) {
+					c = c.getSuperclass();
+				}
+			}
+		} catch (Throwable t) {
+			LOGGER.debug("setBasinFilter field write failed: {}", t.toString());
+		}
+		return false;
+	}
+
+	/**
+	 * Generic fluid amount at a pos via Transfer (works for basin + spout + tanks).
+	 * Opens its own outer transaction for the read.
+	 */
+	public static Optional<Long> getFluidAmount(ServerWorld world, BlockPos pos, Identifier fluidId) {
+		if (world == null || pos == null || fluidId == null) {
+			return Optional.empty();
+		}
+		BlockEntity be = world.getBlockEntity(pos);
+		if (be != null && isInstanceOfAny(be, BASIN_CLASSES)) {
+			Optional<Long> basin = getBasinFluidAmount(world, pos, fluidId);
+			if (basin.isPresent()) {
+				return basin;
+			}
+		}
+		Storage<FluidVariant> storage = null;
+		try {
+			storage = FluidStorage.SIDED.find(world, pos, null);
+		} catch (Throwable t) {
+			LOGGER.debug("getFluidAmount sided lookup: {}", t.toString());
+		}
+		if (storage == null) {
+			storage = fluidCapabilityOf(be);
+		}
+		if (storage == null) {
+			return Optional.empty();
+		}
+		final Storage<FluidVariant> s = storage;
+		try (Transaction tx = Transaction.openOuter()) {
+			long total = 0;
+			for (StorageView<FluidVariant> view : s.iterable(tx)) {
+				if (view.isResourceBlank()) {
+					continue;
+				}
+				if (sameFluidId(view.getResource(), fluidId)) {
+					total += view.getAmount();
+				}
+			}
+			return Optional.of(total);
+		} catch (Throwable t) {
+			return Optional.empty();
+		}
 	}
 
 	// --- Basin ---
@@ -938,7 +1062,12 @@ public final class CreateBlockEntityIO {
 				}
 			}
 		}
-		return readField(be, "depotBehaviour");
+		Object fallback = readField(be, "depotBehaviour");
+		if (fallback == null && be.getClass().getSimpleName().toLowerCase().contains("depot")) {
+			LOGGER.warn("getDepotBehaviour: reflection missed for {} — Create package rename? tried {}",
+					be.getClass().getName(), String.join(",", DEPOT_BEHAVIOUR_CLASSES));
+		}
+		return fallback;
 	}
 
 	private static void setDepotHeld(Object behaviour, ItemStack stack) {
@@ -1019,6 +1148,74 @@ public final class CreateBlockEntityIO {
 			return Optional.empty();
 		}
 		return Optional.of(extractSmartInventory(inv, filter, maxCount));
+	}
+
+	/**
+	 * Distribute ordered recipe inputs across a 3x3 mechanical crafter group.
+	 * Each crafter BE typically holds a single slot; shaped recipes (e.g. Astral
+	 * compound BBB/AAA/CCC) need one ingredient per crafter in grid order.
+	 * Scans a 3x3 square at the center's Y (plus one above/below for wall-mounted grids),
+	 * sorts by (y, x, z) for deterministic order, and inserts one input stack per crafter.
+	 * @param inputs ordered per-slot inputs (expanded counts stay as single stacks per slot)
+	 * @return per-input remaining stacks (empty = fully inserted for that slot)
+	 */
+	public static java.util.List<ItemStack> insertCrafterGroup(
+			ServerWorld world, BlockPos center, java.util.List<ItemStack> inputs) {
+		java.util.List<ItemStack> remaining = new java.util.ArrayList<>();
+		if (world == null || center == null || inputs == null) {
+			return remaining;
+		}
+		java.util.List<BlockPos> crafters = new java.util.ArrayList<>();
+		for (int dy = -1; dy <= 1; dy++) {
+			for (int dx = -1; dx <= 1; dx++) {
+				for (int dz = -1; dz <= 1; dz++) {
+					// Keep the scan to the horizontal 3x3 at center Y first; vertical offsets
+					// cover wall-mounted grids. Dedupe by checking BE type.
+					if (Math.abs(dy) + Math.abs(dx) + Math.abs(dz) > 2 && dy != 0) {
+						continue;
+					}
+					BlockPos p = center.add(dx, dy, dz);
+					BlockEntity be = world.getBlockEntity(p);
+					if (be != null && isInstanceOfAny(be, CRAFTER_CLASSES)) {
+						crafters.add(p.toImmutable());
+					}
+				}
+			}
+		}
+		crafters.sort((a, b) -> {
+			int c = Integer.compare(a.getY(), b.getY());
+			if (c != 0) {
+				return c;
+			}
+			c = Integer.compare(a.getX(), b.getX());
+			if (c != 0) {
+				return c;
+			}
+			return Integer.compare(a.getZ(), b.getZ());
+		});
+		LOGGER.info("insertCrafterGroup: found {} crafters around {}", crafters.size(), center.toShortString());
+		int n = Math.min(inputs.size(), crafters.size());
+		for (int i = 0; i < inputs.size(); i++) {
+			ItemStack want = inputs.get(i) == null ? ItemStack.EMPTY : inputs.get(i).copy();
+			if (want.isEmpty()) {
+				remaining.add(ItemStack.EMPTY);
+				continue;
+			}
+			if (i >= crafters.size()) {
+				remaining.add(want);
+				continue;
+			}
+			BlockPos p = crafters.get(i);
+			BlockEntity be = world.getBlockEntity(p);
+			Optional<ItemStack> r = insertCrafter(be, want);
+			remaining.add(r.orElse(want));
+		}
+		if (crafters.isEmpty()) {
+			LOGGER.warn("insertCrafterGroup: no crafters near {}", center.toShortString());
+		} else if (n < inputs.size()) {
+			LOGGER.warn("insertCrafterGroup: only {}/{} slots filled (need bigger crafter grid)", n, inputs.size());
+		}
+		return remaining;
 	}
 
 	// --- SmartInventory / ItemStackHandler helpers ---
