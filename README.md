@@ -59,12 +59,22 @@ Package `com.ezquest.astralclef.tasks.create.world`:
 
 `CreateRecipeExecutor.tick(server)` auto-binds context from the first online player when jobs need it. Manual: `/astralclef context`.
 
+#### Ch01 harden status (`feat(create): harden Ch01 fluid+kinetic`)
+
+| Area | Status |
+|------|--------|
+| Basin fluid `kubejs:compound_mixture` | **Hardened** — `inputTank`/`outputTank` (SmartFluidTankBehaviour) + Fabric `Storage<FluidVariant>` / `fluidCapability` insert+extract |
+| Mixer/Press kinetic PROCESS | **Hardened** — watch `running`, `runningTicks`, `processingTicks`, `currentRecipe`, `getSpeed()`, `getBasin()`; wait start→complete or clear `failReason` timeout (no blind soft-complete) |
+| Pack-id confirm | **Hardened** — `Ch01RecipeBindings.confirmMatched` logs RecipeManager `ResourceLocation`; `/astralclef recipes` dumps Ch01 binds (type+IO bind retained) |
+| Create pin | `create-fabric-1.18.2:0.5.1-f-build.1415+mc1.18.2` |
+
 **Remaining gaps / soft:**
-- Spout / `compound_mixture` **fluid** Transfer
+- Spout fluid fill/drain still soft (`GAP_SPOUT_FLUID`) — basin Transfer preferred for mixture
 - Basin filter **write**; crafter **pattern** encode (grid slots only)
-- Press/Mixer PROCESS: reflective `running` hint only (no RPM/stress)
-- Exact pack-local recipe ids (bind placeholders resolve via RecipeManager; `Ch01RecipeIds` constants for swap)
+- Exact pack-local KubeJS auto-ids still unresolved until datapack load (`Ch01RecipeIds` swap hooks)
 - DepotBehaviour / Create package renames when reflection soft-fails
+- Non-kinetic kinds (furnace/smith) still use timed PROCESS dwell
+- Stress/network RPM not modeled beyond `getSpeed()`
 
 ### Ch0.5–1 Create loop (ship order)
 
@@ -86,6 +96,7 @@ Subtasks fire `CreateRecipeKinds` with bind ids and wait for job completion.
 | `/astralclef context` | Bind locate origin to your world + block pos |
 | `/astralclef cancel` | Cancel active task |
 | `/astralclef tick` | Manual TaskRunner + Create executor tick |
+| `/astralclef recipes` | Dump Ch01 binds → resolved RecipeManager pack ids |
 
 ## Build
 

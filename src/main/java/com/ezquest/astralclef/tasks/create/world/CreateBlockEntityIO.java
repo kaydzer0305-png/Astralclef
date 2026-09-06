@@ -4,10 +4,20 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Optional;
 
+import net.fabricmc.fabric.api.transfer.v1.fluid.FluidStorage;
+import net.fabricmc.fabric.api.transfer.v1.fluid.FluidVariant;
+import net.fabricmc.fabric.api.transfer.v1.storage.Storage;
+import net.fabricmc.fabric.api.transfer.v1.storage.StorageView;
+import net.fabricmc.fabric.api.transfer.v1.transaction.Transaction;
+
 import net.minecraft.block.entity.BlockEntity;
+import net.minecraft.fluid.Fluid;
 import net.minecraft.item.ItemStack;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Direction;
+import net.minecraft.util.registry.Registry;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,8 +46,12 @@ import org.slf4j.LoggerFactory;
  *   <li>{@value #GAP_SPOUT_FLUID} — spout fluid fill/drain not fully wired; Transfer fluid path preferred</li>
  *   <li>{@value #GAP_BASIN_FILTER_WRITE} — basin recipe filter readable when present; write not implemented</li>
  *   <li>{@value #GAP_CRAFTER_PATTERN} — crafter grid slot insert/extract only; pattern encoding TODO</li>
- *   <li>{@value #GAP_KINETIC_PROCESS} — press/mixer {@code running} is best-effort reflective; no recipe match</li>
  * </ul>
+ * <p>
+ * <b>Hardened (Ch01)</b>: basin {@code inputTank}/{@code outputTank} + Fabric
+ * {@code Storage&lt;FluidVariant&gt;} for {@code kubejs:compound_mixture}; mixer/press
+ * kinetic via {@code running}/{@code runningTicks}/{@code processingTicks}/{@code currentRecipe}/
+ * {@code getSpeed()}/{@code getBasin()}.
  */
 public final class CreateBlockEntityIO {
 	private static final Logger LOGGER = LoggerFactory.getLogger("astralclef/create-be-io");
@@ -45,7 +59,14 @@ public final class CreateBlockEntityIO {
 	public static final String GAP_SPOUT_FLUID = "spout fluid I/O soft — use Fluid Transfer";
 	public static final String GAP_BASIN_FILTER_WRITE = "basin FilteringBehaviour write not implemented";
 	public static final String GAP_CRAFTER_PATTERN = "mechanical crafter pattern encode TODO";
+	/** @deprecated kinetic PROCESS hardened via {@link #readKineticState} / {@link #isLikelyProcessing} */
+	@Deprecated
 	public static final String GAP_KINETIC_PROCESS = "press/mixer process detection best-effort only";
+
+	public static final String COMPOUND_MIXTURE_FLUID = "kubejs:compound_mixture";
+	/** Create Fabric fluid unit: 1 bucket = 81000 droplets (Fabric Transfer). */
+	public static final long DROPLETS_PER_BUCKET = 81000L;
+	public static final long DROPLETS_PER_INGOT = 9000L; // Create Astral INGOT ≈ 90 mB → 9000 droplets
 
 	private static final String[] BASIN_CLASSES = {
 			"com.simibubi.create.content.processing.basin.BasinBlockEntity",
@@ -150,29 +171,620 @@ public final class CreateBlockEntityIO {
 	}
 
 	/**
-	 * Best-effort Create processing detection for press / mixer (and basin operator above).
-	 * @return empty if not a known processing BE; true/false when detectable
+	 * Kinetic snapshot for BasinOperatingBlockEntity subclasses (mixer / press).
 	 */
-	public static Optional<Boolean> isProcessing(BlockEntity be) {
-		if (be == null) {
-			return Optional.empty();
+	public static final class KineticState {
+		public final boolean known;
+		public final boolean running;
+		public final int runningTicks;
+		public final int processingTicks;
+		public final float speed;
+		public final boolean hasCurrentRecipe;
+		public final boolean basinPresent;
+
+		public KineticState(boolean known, boolean running, int runningTicks, int processingTicks,
+				float speed, boolean hasCurrentRecipe, boolean basinPresent) {
+			this.known = known;
+			this.running = running;
+			this.runningTicks = runningTicks;
+			this.processingTicks = processingTicks;
+			this.speed = speed;
+			this.hasCurrentRecipe = hasCurrentRecipe;
+			this.basinPresent = basinPresent;
 		}
-		if (isInstanceOfAny(be, MIXER_CLASSES) || isInstanceOfAny(be, PRESS_CLASSES)) {
-			Object running = readField(be, "running");
-			if (running instanceof Boolean b) {
-				return Optional.of(b);
+
+		/** True when the operator is actively applying a basin recipe. */
+		public boolean isLikelyProcessing() {
+			if (!known) {
+				return false;
 			}
+			if (running) {
+				return true;
+			}
+			if (Math.abs(speed) > 0.001f && (processingTicks > 0 || hasCurrentRecipe || runningTicks > 0)) {
+				return true;
+			}
+			return false;
+		}
+
+		@Override
+		public String toString() {
+			return "KineticState{known=" + known + ", running=" + running
+					+ ", runningTicks=" + runningTicks + ", processingTicks=" + processingTicks
+					+ ", speed=" + speed + ", recipe=" + hasCurrentRecipe
+					+ ", basin=" + basinPresent + "}";
+		}
+	}
+
+	/**
+	 * Read mixer/press BasinOperating fields:
+	 * {@code running}, {@code runningTicks}, {@code processingTicks}, {@code currentRecipe},
+	 * {@code getSpeed()}, {@code getBasin()}.
+	 */
+	public static KineticState readKineticState(BlockEntity be) {
+		if (be == null) {
+			return new KineticState(false, false, 0, 0, 0f, false, false);
+		}
+		boolean mixerOrPress = isInstanceOfAny(be, MIXER_CLASSES) || isInstanceOfAny(be, PRESS_CLASSES)
+				|| isBasinOperating(be);
+		if (!mixerOrPress) {
+			return new KineticState(false, false, 0, 0, 0f, false, false);
+		}
+		boolean running = false;
+		Object runningObj = readField(be, "running");
+		if (runningObj instanceof Boolean b) {
+			running = b;
+		} else {
 			Object behaviour = invokeNoArg(be, "getPressingBehaviour");
 			if (behaviour != null) {
 				Object br = readField(behaviour, "running");
-				if (br instanceof Boolean b) {
-					return Optional.of(b);
+				if (br instanceof Boolean bb) {
+					running = bb;
 				}
 			}
-			LOGGER.debug("isProcessing: {}", GAP_KINETIC_PROCESS);
-			return Optional.of(false);
+		}
+		int runningTicks = asInt(readField(be, "runningTicks"), 0);
+		int processingTicks = asInt(readField(be, "processingTicks"), 0);
+		float speed = 0f;
+		Object speedObj = invokeNoArg(be, "getSpeed");
+		if (speedObj instanceof Number n) {
+			speed = n.floatValue();
+		} else {
+			Object sf = readField(be, "speed");
+			if (sf instanceof Number n) {
+				speed = n.floatValue();
+			}
+		}
+		Object currentRecipe = readField(be, "currentRecipe");
+		if (currentRecipe == null) {
+			currentRecipe = invokeNoArg(be, "getCurrentRecipe");
+		}
+		boolean hasRecipe = currentRecipe != null;
+		Object basin = invokeNoArg(be, "getBasin");
+		if (basin instanceof Optional<?> opt) {
+			basin = opt.orElse(null);
+		}
+		boolean basinPresent = basin != null;
+		KineticState state = new KineticState(true, running, runningTicks, processingTicks, speed, hasRecipe, basinPresent);
+		LOGGER.debug("readKineticState {}: {}", be.getClass().getSimpleName(), state);
+		return state;
+	}
+
+	/**
+	 * Best-effort Create processing detection for press / mixer (BasinOperating).
+	 * @return empty if not a known processing BE; true/false when detectable
+	 */
+	public static Optional<Boolean> isProcessing(BlockEntity be) {
+		KineticState state = readKineticState(be);
+		if (!state.known) {
+			return Optional.empty();
+		}
+		return Optional.of(state.isLikelyProcessing());
+	}
+
+	/** Convenience: mixer/press likely mid-recipe (running / ticks / recipe + speed). */
+	public static boolean isLikelyProcessing(BlockEntity be) {
+		return readKineticState(be).isLikelyProcessing();
+	}
+
+	private static boolean isBasinOperating(BlockEntity be) {
+		if (be == null) {
+			return false;
+		}
+		String[] names = {
+				"com.simibubi.create.content.processing.basin.BasinOperatingBlockEntity",
+				"com.simibubi.create.content.contraptions.processing.BasinOperatingTileEntity",
+				"com.simibubi.create.content.contraptions.components.actors.BasinOperatingTileEntity"
+		};
+		return isInstanceOfAny(be, names);
+	}
+
+	// --- Basin fluids (compound_mixture) ---
+
+	/**
+	 * Insert fluid into basin via Fabric Transfer {@code fluidCapability} / sided FluidStorage,
+	 * falling back to reflective {@code inputTank} SmartFluidTankBehaviour.
+	 * @return empty if no fluid path; otherwise remaining amount (0 = fully inserted)
+	 */
+	public static Optional<Long> tryInsertFluid(ServerWorld world, BlockPos pos, Identifier fluidId, long amount) {
+		if (world == null || pos == null || fluidId == null || amount <= 0) {
+			return Optional.empty();
+		}
+		BlockEntity be = world.getBlockEntity(pos);
+		if (be == null || !isInstanceOfAny(be, BASIN_CLASSES)) {
+			return Optional.empty();
+		}
+		long viaTransfer = insertFluidTransfer(world, pos, fluidId, amount);
+		if (viaTransfer >= 0) {
+			long remaining = amount - viaTransfer;
+			LOGGER.info("tryInsertFluid Transfer {} x{} at {} inserted={} remaining={}",
+					fluidId, amount, pos.toShortString(), viaTransfer, remaining);
+			return Optional.of(Math.max(0L, remaining));
+		}
+		long viaTank = insertFluidTankBehaviour(be, fluidId, amount);
+		if (viaTank >= 0) {
+			long remaining = amount - viaTank;
+			invokeNoArg(be, "notifyChangeOfContents");
+			LOGGER.info("tryInsertFluid tank {} x{} at {} inserted={} remaining={}",
+					fluidId, amount, pos.toShortString(), viaTank, remaining);
+			return Optional.of(Math.max(0L, remaining));
 		}
 		return Optional.empty();
+	}
+
+	/**
+	 * Extract fluid from basin output (prefer {@code outputTank}) then Transfer API.
+	 * @return empty if no fluid path; otherwise amount extracted (may be 0)
+	 */
+	public static Optional<Long> tryExtractFluid(ServerWorld world, BlockPos pos, Identifier fluidId, long maxAmount) {
+		if (world == null || pos == null || fluidId == null || maxAmount <= 0) {
+			return Optional.empty();
+		}
+		BlockEntity be = world.getBlockEntity(pos);
+		if (be == null || !isInstanceOfAny(be, BASIN_CLASSES)) {
+			return Optional.empty();
+		}
+		long viaTank = extractFluidTankBehaviour(be, fluidId, maxAmount);
+		if (viaTank > 0) {
+			invokeNoArg(be, "notifyChangeOfContents");
+			LOGGER.info("tryExtractFluid tank {} extracted {} at {}", fluidId, viaTank, pos.toShortString());
+			return Optional.of(viaTank);
+		}
+		long viaTransfer = extractFluidTransfer(world, pos, fluidId, maxAmount);
+		if (viaTransfer >= 0) {
+			LOGGER.info("tryExtractFluid Transfer {} extracted {} at {}", fluidId, viaTransfer, pos.toShortString());
+			return Optional.of(viaTransfer);
+		}
+		if (viaTank == 0) {
+			return Optional.of(0L);
+		}
+		return Optional.empty();
+	}
+
+	/** Amount of {@code fluidId} currently in basin tanks (input+output), or empty if undetectable. */
+	public static Optional<Long> getBasinFluidAmount(ServerWorld world, BlockPos pos, Identifier fluidId) {
+		if (world == null || pos == null || fluidId == null) {
+			return Optional.empty();
+		}
+		BlockEntity be = world.getBlockEntity(pos);
+		if (be == null || !isInstanceOfAny(be, BASIN_CLASSES)) {
+			return Optional.empty();
+		}
+		long total = 0;
+		boolean any = false;
+		long t = amountInTankBehaviour(readField(be, "outputTank"), fluidId);
+		if (t >= 0) {
+			total += t;
+			any = true;
+		}
+		t = amountInTankBehaviour(readField(be, "inputTank"), fluidId);
+		if (t >= 0) {
+			total += t;
+			any = true;
+		}
+		if (!any) {
+			long viaCap = amountInFluidCapability(be, fluidId);
+			if (viaCap >= 0) {
+				return Optional.of(viaCap);
+			}
+			long viaWorld = amountInFluidStorage(world, pos, fluidId);
+			if (viaWorld >= 0) {
+				return Optional.of(viaWorld);
+			}
+			return Optional.empty();
+		}
+		return Optional.of(total);
+	}
+
+	public static boolean basinHasFluid(ServerWorld world, BlockPos pos, Identifier fluidId) {
+		return getBasinFluidAmount(world, pos, fluidId).orElse(0L) > 0L;
+	}
+
+	private static long insertFluidTransfer(ServerWorld world, BlockPos pos, Identifier fluidId, long amount) {
+		try {
+			FluidVariant variant = fluidVariantOf(fluidId);
+			if (variant == null || variant.isBlank()) {
+				return -1;
+			}
+			Storage<FluidVariant> storage = FluidStorage.SIDED.find(world, pos, Direction.UP);
+			if (storage == null) {
+				storage = FluidStorage.SIDED.find(world, pos, null);
+			}
+			if (storage == null) {
+				BlockEntity be = world.getBlockEntity(pos);
+				storage = fluidCapabilityOf(be);
+			}
+			if (storage == null || !storage.supportsInsertion()) {
+				return -1;
+			}
+			try (Transaction tx = Transaction.openOuter()) {
+				long inserted = storage.insert(variant, amount, tx);
+				tx.commit();
+				return inserted;
+			}
+		} catch (Throwable t) {
+			LOGGER.debug("insertFluidTransfer: {}", t.toString());
+			return -1;
+		}
+	}
+
+	private static long extractFluidTransfer(ServerWorld world, BlockPos pos, Identifier fluidId, long maxAmount) {
+		try {
+			FluidVariant want = fluidVariantOf(fluidId);
+			if (want == null || want.isBlank()) {
+				return -1;
+			}
+			Storage<FluidVariant> storage = FluidStorage.SIDED.find(world, pos, Direction.DOWN);
+			if (storage == null) {
+				storage = FluidStorage.SIDED.find(world, pos, null);
+			}
+			if (storage == null) {
+				storage = fluidCapabilityOf(world.getBlockEntity(pos));
+			}
+			if (storage == null || !storage.supportsExtraction()) {
+				return -1;
+			}
+			try (Transaction tx = Transaction.openOuter()) {
+				long extracted = 0;
+				for (StorageView<FluidVariant> view : storage) {
+					if (view.isResourceBlank()) {
+						continue;
+					}
+					FluidVariant resource = view.getResource();
+					if (!resource.equals(want) && !sameFluidId(resource, fluidId)) {
+						continue;
+					}
+					extracted = storage.extract(resource, maxAmount, tx);
+					if (extracted > 0) {
+						tx.commit();
+						return extracted;
+					}
+				}
+			}
+			return 0;
+		} catch (Throwable t) {
+			LOGGER.debug("extractFluidTransfer: {}", t.toString());
+			return -1;
+		}
+	}
+
+	@SuppressWarnings("unchecked")
+	private static Storage<FluidVariant> fluidCapabilityOf(BlockEntity be) {
+		if (be == null) {
+			return null;
+		}
+		Object cap = readField(be, "fluidCapability");
+		if (cap instanceof Storage) {
+			return (Storage<FluidVariant>) cap;
+		}
+		Object got = invokeNoArg(be, "getFluidCapability");
+		if (got instanceof Storage) {
+			return (Storage<FluidVariant>) got;
+		}
+		return null;
+	}
+
+	private static long amountInFluidCapability(BlockEntity be, Identifier fluidId) {
+		Storage<FluidVariant> storage = fluidCapabilityOf(be);
+		if (storage == null) {
+			return -1;
+		}
+		return sumStorage(storage, fluidId);
+	}
+
+	private static long amountInFluidStorage(ServerWorld world, BlockPos pos, Identifier fluidId) {
+		try {
+			Storage<FluidVariant> storage = FluidStorage.SIDED.find(world, pos, null);
+			if (storage == null) {
+				return -1;
+			}
+			return sumStorage(storage, fluidId);
+		} catch (Throwable t) {
+			return -1;
+		}
+	}
+
+	private static long sumStorage(Storage<FluidVariant> storage, Identifier fluidId) {
+		long total = 0;
+		try {
+			for (StorageView<FluidVariant> view : storage) {
+				if (view.isResourceBlank()) {
+					continue;
+				}
+				if (sameFluidId(view.getResource(), fluidId)) {
+					total += view.getAmount();
+				}
+			}
+			return total;
+		} catch (Throwable t) {
+			return -1;
+		}
+	}
+
+	private static long insertFluidTankBehaviour(BlockEntity be, Identifier fluidId, long amount) {
+		Object tank = readField(be, "inputTank");
+		if (tank == null) {
+			tank = invokeNoArg(be, "getInputTank");
+		}
+		long n = fillSmartFluidTank(tank, fluidId, amount);
+		return n;
+	}
+
+	private static long extractFluidTankBehaviour(BlockEntity be, Identifier fluidId, long maxAmount) {
+		Object out = readField(be, "outputTank");
+		if (out == null) {
+			out = invokeNoArg(be, "getOutputTank");
+		}
+		long n = drainSmartFluidTank(out, fluidId, maxAmount);
+		if (n > 0) {
+			return n;
+		}
+		Object in = readField(be, "inputTank");
+		if (in == null) {
+			in = invokeNoArg(be, "getInputTank");
+		}
+		return drainSmartFluidTank(in, fluidId, maxAmount);
+	}
+
+	private static long amountInTankBehaviour(Object tankBehaviour, Identifier fluidId) {
+		if (tankBehaviour == null) {
+			return -1;
+		}
+		Object primary = invokeNoArg(tankBehaviour, "getPrimaryHandler");
+		if (primary == null) {
+			primary = readField(tankBehaviour, "tank");
+		}
+		if (primary == null) {
+			return -1;
+		}
+		Object fluidStack = invokeNoArg(primary, "getFluid");
+		if (fluidStack == null) {
+			fluidStack = readField(primary, "fluid");
+		}
+		if (fluidStack == null) {
+			return 0;
+		}
+		if (!fluidStackMatches(fluidStack, fluidId)) {
+			return 0;
+		}
+		Object amt = invokeNoArg(fluidStack, "getAmount");
+		if (amt instanceof Number n) {
+			return n.longValue();
+		}
+		amt = readField(fluidStack, "amount");
+		return amt instanceof Number n ? n.longValue() : 0;
+	}
+
+	private static long fillSmartFluidTank(Object tankBehaviour, Identifier fluidId, long amount) {
+		if (tankBehaviour == null) {
+			return -1;
+		}
+		try {
+			Object primary = invokeNoArg(tankBehaviour, "getPrimaryHandler");
+			if (primary == null) {
+				return -1;
+			}
+			Object fluidStack = newFluidStack(fluidId, amount);
+			if (fluidStack == null) {
+				return -1;
+			}
+			// FluidTank#fill(FluidStack, boolean) — Create/Forge-style; Fabric port may use long fill
+			for (Method m : primary.getClass().getMethods()) {
+				if (!"fill".equals(m.getName()) || m.getParameterCount() < 1) {
+					continue;
+				}
+				m.setAccessible(true);
+				Class<?>[] p = m.getParameterTypes();
+				Object result;
+				if (p.length == 2 && (p[1] == boolean.class || p[1] == Boolean.class)) {
+					// boolean simulate: false = execute
+					result = m.invoke(primary, fluidStack, false);
+				} else if (p.length == 2 && p[1].isEnum()) {
+					// FluidAction.EXECUTE
+					Object execute = null;
+					for (Object c : p[1].getEnumConstants()) {
+						if ("EXECUTE".equals(String.valueOf(c)) || "EXECUTE".equals(((Enum<?>) c).name())) {
+							execute = c;
+							break;
+						}
+					}
+					if (execute == null) {
+						continue;
+					}
+					result = m.invoke(primary, fluidStack, execute);
+				} else if (p.length == 1) {
+					result = m.invoke(primary, fluidStack);
+				} else {
+					continue;
+				}
+				if (result instanceof Number n) {
+					return n.longValue();
+				}
+			}
+			// Fabric Transfer path on behaviour
+			Object capability = readField(tankBehaviour, "capability");
+			if (capability instanceof Storage) {
+				@SuppressWarnings("unchecked")
+				Storage<FluidVariant> storage = (Storage<FluidVariant>) capability;
+				FluidVariant variant = fluidVariantOf(fluidId);
+				if (variant == null) {
+					return -1;
+				}
+				try (Transaction tx = Transaction.openOuter()) {
+					long inserted = storage.insert(variant, amount, tx);
+					tx.commit();
+					return inserted;
+				}
+			}
+		} catch (Throwable t) {
+			LOGGER.debug("fillSmartFluidTank: {}", t.toString());
+		}
+		return -1;
+	}
+
+	private static long drainSmartFluidTank(Object tankBehaviour, Identifier fluidId, long maxAmount) {
+		if (tankBehaviour == null) {
+			return -1;
+		}
+		try {
+			Object primary = invokeNoArg(tankBehaviour, "getPrimaryHandler");
+			if (primary == null) {
+				return -1;
+			}
+			if (amountInTankBehaviour(tankBehaviour, fluidId) <= 0) {
+				return 0;
+			}
+			for (Method m : primary.getClass().getMethods()) {
+				if (!"drain".equals(m.getName())) {
+					continue;
+				}
+				m.setAccessible(true);
+				Class<?>[] p = m.getParameterTypes();
+				Object result = null;
+				if (p.length == 2 && p[0] == int.class && (p[1] == boolean.class || p[1] == Boolean.class)) {
+					result = m.invoke(primary, (int) Math.min(maxAmount, Integer.MAX_VALUE), false);
+				} else if (p.length == 2 && p[0] == long.class && (p[1] == boolean.class || p[1] == Boolean.class)) {
+					result = m.invoke(primary, maxAmount, false);
+				} else if (p.length == 2 && p[1].isEnum()) {
+					Object execute = null;
+					for (Object c : p[1].getEnumConstants()) {
+						if ("EXECUTE".equals(((Enum<?>) c).name())) {
+							execute = c;
+							break;
+						}
+					}
+					if (execute == null) {
+						continue;
+					}
+					Object amtArg = p[0] == long.class ? Long.valueOf(maxAmount)
+							: Integer.valueOf((int) Math.min(maxAmount, Integer.MAX_VALUE));
+					result = m.invoke(primary, amtArg, execute);
+				} else if (p.length == 1 && (p[0] == int.class || p[0] == long.class)) {
+					Object amtArg = p[0] == long.class ? Long.valueOf(maxAmount)
+							: Integer.valueOf((int) Math.min(maxAmount, Integer.MAX_VALUE));
+					result = m.invoke(primary, amtArg);
+				}
+				if (result != null) {
+					Object amt = invokeNoArg(result, "getAmount");
+					if (amt instanceof Number n) {
+						return n.longValue();
+					}
+					if (result instanceof Number n) {
+						return n.longValue();
+					}
+				}
+			}
+			Object capability = readField(tankBehaviour, "capability");
+			if (capability instanceof Storage) {
+				@SuppressWarnings("unchecked")
+				Storage<FluidVariant> storage = (Storage<FluidVariant>) capability;
+				FluidVariant variant = fluidVariantOf(fluidId);
+				if (variant == null) {
+					return -1;
+				}
+				try (Transaction tx = Transaction.openOuter()) {
+					long extracted = storage.extract(variant, maxAmount, tx);
+					tx.commit();
+					return extracted;
+				}
+			}
+		} catch (Throwable t) {
+			LOGGER.debug("drainSmartFluidTank: {}", t.toString());
+		}
+		return -1;
+	}
+
+	private static Object newFluidStack(Identifier fluidId, long amount) {
+		Fluid fluid = Registry.FLUID.get(fluidId);
+		if (fluid == null || Registry.FLUID.getId(fluid).equals(Registry.FLUID.getDefaultId())
+				&& !fluidId.equals(Registry.FLUID.getDefaultId())) {
+			// missing fluid registry entry
+			Identifier got = Registry.FLUID.getId(fluid);
+			if (!fluidId.equals(got)) {
+				LOGGER.debug("newFluidStack: fluid not registered {}", fluidId);
+				return null;
+			}
+		}
+		String[] stackClasses = {
+				"net.fabricmc.fabric.api.transfer.v1.fluid.FluidVariant", // not a stack
+				"io.github.fabricators_of_create.porting_lib.transfer.fluid.FluidStack",
+				"io.github.fabricators_of_create.porting_lib.fluids.FluidStack",
+				"net.minecraftforge.fluids.FluidStack"
+		};
+		for (String name : stackClasses) {
+			try {
+				Class<?> c = Class.forName(name);
+				try {
+					return c.getConstructor(Fluid.class, int.class).newInstance(fluid, (int) Math.min(amount, Integer.MAX_VALUE));
+				} catch (NoSuchMethodException e) {
+					return c.getConstructor(Fluid.class, long.class).newInstance(fluid, amount);
+				}
+			} catch (Throwable ignored) {
+			}
+		}
+		return null;
+	}
+
+	private static FluidVariant fluidVariantOf(Identifier fluidId) {
+		try {
+			Fluid fluid = Registry.FLUID.get(fluidId);
+			Identifier got = Registry.FLUID.getId(fluid);
+			if (!fluidId.equals(got)) {
+				return null;
+			}
+			return FluidVariant.of(fluid);
+		} catch (Throwable t) {
+			return null;
+		}
+	}
+
+	private static boolean sameFluidId(FluidVariant variant, Identifier fluidId) {
+		if (variant == null || variant.isBlank() || fluidId == null) {
+			return false;
+		}
+		return fluidId.equals(Registry.FLUID.getId(variant.getFluid()));
+	}
+
+	private static boolean fluidStackMatches(Object fluidStack, Identifier fluidId) {
+		if (fluidStack == null || fluidId == null) {
+			return false;
+		}
+		Object fluid = invokeNoArg(fluidStack, "getFluid");
+		if (fluid instanceof Fluid f) {
+			return fluidId.equals(Registry.FLUID.getId(f));
+		}
+		Object variant = invokeNoArg(fluidStack, "getType");
+		if (variant instanceof FluidVariant fv) {
+			return sameFluidId(fv, fluidId);
+		}
+		return false;
+	}
+
+	private static int asInt(Object o, int def) {
+		if (o instanceof Number n) {
+			return n.intValue();
+		}
+		return def;
 	}
 
 	/** Readable basin filter stack when FilteringBehaviour is present; empty otherwise. */

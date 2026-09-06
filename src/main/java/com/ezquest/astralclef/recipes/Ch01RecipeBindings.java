@@ -307,7 +307,8 @@ public final class Ch01RecipeBindings {
 
 		if (best != null) {
 			spec.setResolved(best);
-			LOGGER.info("Resolved {} → {} (type {})", spec.bindId, best, spec.recipeType);
+			LOGGER.info("Resolved {} → {} (type {}) [REI/RecipeManager confirm]",
+					spec.bindId, best, spec.recipeType);
 			return Optional.of(best);
 		}
 		LOGGER.debug("No RecipeManager match for {} yet (type={}, out={})",
@@ -333,6 +334,42 @@ public final class Ch01RecipeBindings {
 			spec.setResolved(null);
 			resolve(server, spec);
 		}
+	}
+
+	/**
+	 * RecipeManager/REI-friendly confirm: resolve type+I/O, log+cache matched
+	 * {@link Identifier}, keep {@code astralclef:bind/*} as the bind key.
+	 */
+	public static Optional<Identifier> confirmMatched(MinecraftServer server, RecipeSpec spec) {
+		Optional<Identifier> id = resolve(server, spec);
+		if (id.isPresent()) {
+			LOGGER.info("confirmMatched bind={} packId={} type={} out={}",
+					spec.bindId, id.get(), spec.recipeType, spec.outputId);
+		} else {
+			LOGGER.info("confirmMatched bind={} UNRESOLVED type={} out={} (type+IO bind retained)",
+					spec.bindId, spec.recipeType, spec.outputId);
+		}
+		return id;
+	}
+
+	public static Optional<Identifier> confirmMatched(MinecraftServer server, String bindId) {
+		return byBind(bindId).flatMap(spec -> confirmMatched(server, spec));
+	}
+
+	/** Lines for {@code /astralclef recipes} — Ch01 binds with resolved pack ids. */
+	public static List<String> dumpCh01(MinecraftServer server) {
+		List<String> lines = new ArrayList<>();
+		lines.add("Ch01 RecipeBindings (type+IO bind; pack id when RecipeManager hits):");
+		for (RecipeSpec spec : BY_BIND.values()) {
+			Optional<Identifier> id = server != null ? resolve(server, spec) : spec.resolvedId();
+			String pack = id.map(Identifier::toString).orElse("(unresolved)");
+			lines.add(String.format("  %s | type=%s | out=%sx%s | pack=%s",
+					spec.bindId, spec.recipeType, spec.outputCount, spec.outputId, pack));
+			for (IngredientRef ref : spec.inputs) {
+				lines.add("      in: " + ref);
+			}
+		}
+		return lines;
 	}
 
 	private static Identifier scanAllRecipes(RecipeManager manager, Identifier typeId, RecipeSpec spec) {

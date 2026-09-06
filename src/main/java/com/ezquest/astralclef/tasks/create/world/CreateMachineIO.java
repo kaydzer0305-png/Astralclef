@@ -12,6 +12,7 @@ import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.inventory.Inventory;
 import net.minecraft.item.ItemStack;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 
@@ -22,6 +23,9 @@ import org.slf4j.LoggerFactory;
  * Insert / extract helpers for Create machines.
  * Prefers typed Create BE I/O via {@link CreateBlockEntityIO} (Basin / Depot / Crafter / …),
  * then Fabric Transfer {@link ItemStorage}, then {@link Inventory}.
+ * <p>
+ * Fluid path: basin {@code inputTank}/{@code outputTank} + Fabric {@code Storage&lt;FluidVariant&gt;}
+ * for {@code kubejs:compound_mixture}. Kinetic: mixer/press {@link CreateBlockEntityIO#readKineticState}.
  */
 public final class CreateMachineIO {
 	private static final Logger LOGGER = LoggerFactory.getLogger("astralclef/create-io");
@@ -100,21 +104,81 @@ public final class CreateMachineIO {
 	}
 
 	/**
-	 * PROCESS helper: true when Create press/mixer reports {@code running}, or when the
-	 * basin's operator above is running. False when undetectable or idle.
+	 * PROCESS helper: true when Create press/mixer (BasinOperating) is mid-recipe —
+	 * {@code running}, {@code processingTicks}/{@code runningTicks}, {@code currentRecipe}
+	 * with {@code getSpeed() != 0}. Also checks operator two blocks above a basin.
 	 */
 	public static boolean isLikelyProcessing(ServerWorld world, BlockPos pos) {
 		if (world == null || pos == null) {
 			return false;
 		}
 		BlockEntity be = world.getBlockEntity(pos);
-		Optional<Boolean> typed = CreateBlockEntityIO.isProcessing(be);
+		CreateBlockEntityIO.KineticState here = CreateBlockEntityIO.readKineticState(be);
+		if (here.known && here.isLikelyProcessing()) {
+			return true;
+		}
+		// Mixer/press sit two blocks above basin (gap air)
+		BlockEntity above = world.getBlockEntity(pos.up(2));
+		CreateBlockEntityIO.KineticState op = CreateBlockEntityIO.readKineticState(above);
+		if (op.known && op.isLikelyProcessing()) {
+			return true;
+		}
+		// Also try immediate above (some layouts)
+		BlockEntity up1 = world.getBlockEntity(pos.up());
+		CreateBlockEntityIO.KineticState op1 = CreateBlockEntityIO.readKineticState(up1);
+		return op1.known && op1.isLikelyProcessing();
+	}
+
+	/** Kinetic snapshot for logging / PROCESS wait (machine or operator above). */
+	public static CreateBlockEntityIO.KineticState readKinetic(ServerWorld world, BlockPos pos) {
+		if (world == null || pos == null) {
+			return CreateBlockEntityIO.readKineticState(null);
+		}
+		CreateBlockEntityIO.KineticState here = CreateBlockEntityIO.readKineticState(world.getBlockEntity(pos));
+		if (here.known) {
+			return here;
+		}
+		CreateBlockEntityIO.KineticState above = CreateBlockEntityIO.readKineticState(world.getBlockEntity(pos.up(2)));
+		if (above.known) {
+			return above;
+		}
+		return CreateBlockEntityIO.readKineticState(world.getBlockEntity(pos.up()));
+	}
+
+	/**
+	 * Insert fluid droplets into basin at {@code pos} (Transfer → SmartFluidTankBehaviour).
+	 * @return remaining amount (0 = fully inserted); unchanged {@code amount} if path missing
+	 */
+	public static long insertFluid(ServerWorld world, BlockPos pos, Identifier fluidId, long amount) {
+		if (world == null || pos == null || fluidId == null || amount <= 0) {
+			return amount;
+		}
+		Optional<Long> typed = CreateBlockEntityIO.tryInsertFluid(world, pos, fluidId, amount);
 		if (typed.isPresent()) {
 			return typed.get();
 		}
-		BlockEntity above = world.getBlockEntity(pos.up(2));
-		Optional<Boolean> op = CreateBlockEntityIO.isProcessing(above);
-		return op.orElse(false);
+		LOGGER.warn("insertFluid: no basin fluid path at {} for {}", pos.toShortString(), fluidId);
+		return amount;
+	}
+
+	/**
+	 * Extract fluid droplets from basin.
+	 * @return amount extracted (0 if none / missing path)
+	 */
+	public static long extractFluid(ServerWorld world, BlockPos pos, Identifier fluidId, long maxAmount) {
+		if (world == null || pos == null || fluidId == null || maxAmount <= 0) {
+			return 0;
+		}
+		Optional<Long> typed = CreateBlockEntityIO.tryExtractFluid(world, pos, fluidId, maxAmount);
+		return typed.orElse(0L);
+	}
+
+	public static boolean hasBasinFluid(ServerWorld world, BlockPos pos, Identifier fluidId) {
+		return CreateBlockEntityIO.basinHasFluid(world, pos, fluidId);
+	}
+
+	public static long basinFluidAmount(ServerWorld world, BlockPos pos, Identifier fluidId) {
+		return CreateBlockEntityIO.getBasinFluidAmount(world, pos, fluidId).orElse(0L);
 	}
 
 	private static ItemStack insertTransfer(ServerWorld world, BlockPos pos, ItemStack stack) {

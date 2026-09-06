@@ -91,13 +91,25 @@ public final class CreateRecipeExecutor {
 					job.getRecipeId(), id));
 		}
 		List<ItemStack> inputs = Ch01RecipeBindings.inputStacks(spec.get());
+		Ch01RecipeBindings.RecipeSpec s = spec.get();
 		if (!inputs.isEmpty()) {
-			// Seed first concrete input; multi-insert handled across INSERT ticks later
 			job.setPendingInsert(inputs.get(0).copy());
-			job.setExpectedOutput(Ch01RecipeBindings.outputStack(spec.get()));
 			job.setBindingInputs(inputs);
+		}
+		if (Ch01RecipeBindings.COMPOUND_MIXTURE.equals(s.outputId)
+				|| (s.outputId != null && s.outputId.startsWith("kubejs:") && s.recipeType.contains("mixing"))) {
+			job.setExpectedFluid(s.outputId, CreateBlockEntityIO.DROPLETS_PER_INGOT);
+			job.setExpectedOutput(ItemStack.EMPTY);
+			LOGGER.info("Seeded job {} with {} input stack(s), expect fluid {}",
+					job.getRecipeId(), inputs.size(), s.outputId);
+		} else {
+			job.setExpectedOutput(Ch01RecipeBindings.outputStack(s));
 			LOGGER.info("Seeded job {} with {} input stack(s), expect {}",
-					job.getRecipeId(), inputs.size(), spec.get().outputId);
+					job.getRecipeId(), inputs.size(), s.outputId);
+		}
+		// Pack-id confirm: log matched RecipeManager ResourceLocation when type+IO hits
+		if (server != null) {
+			Ch01RecipeBindings.confirmMatched(server, s);
 		}
 	}
 

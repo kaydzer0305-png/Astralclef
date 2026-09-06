@@ -1,6 +1,7 @@
 package com.ezquest.astralclef.command;
 
 import com.ezquest.astralclef.AstralclefMod;
+import com.ezquest.astralclef.recipes.Ch01RecipeBindings;
 import com.ezquest.astralclef.task.Task;
 import com.ezquest.astralclef.task.TaskRunner;
 import com.ezquest.astralclef.tasks.create.CreateRecipeExecutor;
@@ -40,7 +41,9 @@ public final class AstralCommands {
 						.then(CommandManager.literal("context")
 								.executes(AstralCommands::setContext))
 						.then(CommandManager.literal("tick")
-								.executes(AstralCommands::manualTick)));
+								.executes(AstralCommands::manualTick))
+						.then(CommandManager.literal("recipes")
+								.executes(AstralCommands::dumpRecipes)));
 	}
 
 	private static int startCh01(CommandContext<ServerCommandSource> ctx) {
@@ -91,5 +94,14 @@ public final class AstralCommands {
 		ctx.getSource().sendFeedback(new LiteralText("Astralclef tick → " + msg), false);
 		ctx.getSource().sendFeedback(new LiteralText(CreateRecipeExecutor.getInstance().statusSummary()), false);
 		return 1;
+	}
+
+	/** Dump Ch01 bind → resolved RecipeManager pack ids (REI-friendly confirm). */
+	private static int dumpRecipes(CommandContext<ServerCommandSource> ctx) {
+		java.util.List<String> lines = Ch01RecipeBindings.dumpCh01(ctx.getSource().getServer());
+		for (String line : lines) {
+			ctx.getSource().sendFeedback(new LiteralText(line), false);
+		}
+		return lines.size();
 	}
 }
