@@ -2,6 +2,8 @@ package com.ezquest.astralclef.tasks.phases.ch01;
 
 import com.ezquest.astralclef.task.Task;
 import com.ezquest.astralclef.tasks.create.CreateRecipeKinds;
+import com.ezquest.astralclef.world.BlockPlacementHelper;
+import net.minecraft.util.math.BlockPos;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,7 +47,9 @@ public final class EarlyCreateMachinesSubtask extends Task {
 				step = Step.PLACE_POWER;
 				break;
 			case PLACE_POWER:
-				// TODO: place hand crank / water wheel and connect shafts
+				if (!tryPlace("create:hand_crank") && !tryPlace("create:water_wheel")) {
+					LOGGER.info("Place power: no crank/water wheel item yet — deferring (inventory check)");
+				}
 				step = Step.PLACE_PRESS;
 				break;
 			case PLACE_PRESS:
@@ -55,16 +59,30 @@ public final class EarlyCreateMachinesSubtask extends Task {
 				CreateRecipeKinds.tryExecute(
 						CreateRecipeKinds.Kind.SEQUENCED_ASSEMBLY,
 						"create:sequenced_assembly/precision_mechanism");
-				// Filling hook reserved for early fluid recipes (e.g. honey/lava stubs)
 				CreateRecipeKinds.tryExecute(
 						CreateRecipeKinds.Kind.FILLING,
 						"create:filling/sweet_roll");
+				tryPlace("create:mechanical_press");
 				step = Step.DONE;
 				break;
 			case DONE:
 				break;
 		}
 		return null;
+	}
+
+	private boolean tryPlace(String blockId) {
+		try {
+			var ctx = com.ezquest.astralclef.tasks.create.CreateRecipeExecutor.getInstance().getWorldContext();
+			if (ctx == null || !ctx.isValid() || ctx.getWorld() == null || ctx.getWorld().getServer() == null) return false;
+			var player = ctx.getWorld().getServer().getPlayerManager().getPlayerList().isEmpty() ? null : ctx.getWorld().getServer().getPlayerManager().getPlayerList().get(0);
+			if (player == null) return false;
+			BlockPos pos = BlockPlacementHelper.findPlacePos(player, 3);
+			return BlockPlacementHelper.place(player, blockId, pos);
+		} catch (Throwable t) {
+			LOGGER.debug("tryPlace {} failed: {}", blockId, t.toString());
+			return false;
+		}
 	}
 
 	@Override

@@ -30,17 +30,31 @@ public final class MarsSurfaceSubtask extends Task {
 	protected Task onTick() {
 		switch (step) {
 			case ESTABLISH_BASE:
-				// TODO: shelter, thermal regulation
+				if (!isMarsReached()) {
+					LOGGER.debug("Mars surface: Mars dim {} not yet complete", com.ezquest.astralclef.quests.AstralQuests.CH4_MARS_DIMENSION);
+					break;
+				}
 				step = Step.MINE_MARS_ORES;
 				break;
 			case MINE_MARS_ORES:
-				// TODO: mars-specific ores, quests
 				step = Step.DONE;
 				break;
 			case DONE:
 				break;
 		}
 		return null;
+	}
+
+	private boolean isMarsReached() {
+		try {
+			var ctx = com.ezquest.astralclef.tasks.create.CreateRecipeExecutor.getInstance().getWorldContext();
+			if (ctx == null || !ctx.isValid() || ctx.getWorld() == null || ctx.getWorld().getServer() == null) return true;
+			var server = ctx.getWorld().getServer();
+			if (!com.ezquest.astralclef.quests.FtbQuestsHelper.isQuestsPresent(server)) return true;
+			var player = server.getPlayerManager().getPlayerList().isEmpty() ? null : server.getPlayerManager().getPlayerList().get(0);
+			if (player == null) return true;
+			return com.ezquest.astralclef.quests.FtbQuestsHelper.isQuestComplete(server, player, com.ezquest.astralclef.quests.AstralQuests.CH4_MARS_DIMENSION);
+		} catch (Throwable t) { return true; }
 	}
 
 	@Override

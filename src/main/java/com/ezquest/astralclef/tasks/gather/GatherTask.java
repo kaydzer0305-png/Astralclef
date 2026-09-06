@@ -88,7 +88,13 @@ public final class GatherTask extends Task {
 			if (found != null) {
 				LOGGER.info("Gather {}: nearest {} at {} (dist {})", itemId, found.blockId(), found.pos().toShortString(), String.format("%.1f", Math.sqrt(found.distSq())));
 				if (BaritoneHelper.isPresent()) {
-					BaritoneHelper.pathTo(player, found.pos());
+					// Try MineProcess first (mines the ore), fall back to pathTo
+					java.util.List<net.minecraft.block.Block> blocks = resolveBlocks(blockIds);
+					if (!blocks.isEmpty() && BaritoneHelper.mineBlocks(player, blocks, count)) {
+						LOGGER.info("Gather {}: Baritone MineProcess queued for {}", itemId, blocks);
+					} else {
+						BaritoneHelper.pathTo(player, found.pos());
+					}
 				}
 			} else if (ticks % 100 == 1) {
 				LOGGER.debug("Gather {}: no {} within {}", itemId, blockIds, searchRadius);
@@ -130,6 +136,17 @@ public final class GatherTask extends Task {
 			}
 		} catch (Throwable ignored) {}
 		return null;
+	}
+
+	private java.util.List<net.minecraft.block.Block> resolveBlocks(List<String> ids) {
+		java.util.List<net.minecraft.block.Block> out = new java.util.ArrayList<>();
+		for (String s : ids) {
+			net.minecraft.util.Identifier id = net.minecraft.util.Identifier.tryParse(s);
+			if (id == null) continue;
+			net.minecraft.block.Block b = net.minecraft.util.registry.Registry.BLOCK.get(id);
+			if (id.equals(net.minecraft.util.registry.Registry.BLOCK.getId(b))) out.add(b);
+		}
+		return out;
 	}
 
 	/** Common item → mineable block mappings. Extend for Astral ores (desh, etc). */

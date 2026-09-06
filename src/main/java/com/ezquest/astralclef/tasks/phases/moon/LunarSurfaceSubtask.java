@@ -34,17 +34,33 @@ public final class LunarSurfaceSubtask extends Task {
 	protected Task onTick() {
 		switch (step) {
 			case ESTABLISH_BASE:
-				// TODO: shelter, oxygen sealing, waypoints
+				// Gate on Moon dimension FTB quest (soft — passes when FTB absent/no context)
+				if (!isMoonReached()) {
+					LOGGER.debug("Moon surface: Moon dimension quest {} not yet complete — waiting", com.ezquest.astralclef.quests.AstralQuests.CH3_MOON_DIMENSION);
+					break;
+				}
 				step = Step.MINE_MOON_ORES;
 				break;
 			case MINE_MOON_ORES:
-				// TODO: deepslate/cheese, FTB quest triggers
+				// TODO: deepslate/cheese gather via GatherTask (desh etc after return)
 				step = Step.DONE;
 				break;
 			case DONE:
 				break;
 		}
 		return null;
+	}
+
+	private boolean isMoonReached() {
+		try {
+			var ctx = com.ezquest.astralclef.tasks.create.CreateRecipeExecutor.getInstance().getWorldContext();
+			if (ctx == null || !ctx.isValid() || ctx.getWorld() == null || ctx.getWorld().getServer() == null) return true;
+			var server = ctx.getWorld().getServer();
+			if (!com.ezquest.astralclef.quests.FtbQuestsHelper.isQuestsPresent(server)) return true;
+			var player = server.getPlayerManager().getPlayerList().isEmpty() ? null : server.getPlayerManager().getPlayerList().get(0);
+			if (player == null) return true;
+			return com.ezquest.astralclef.quests.FtbQuestsHelper.isQuestComplete(server, player, com.ezquest.astralclef.quests.AstralQuests.CH3_MOON_DIMENSION);
+		} catch (Throwable t) { return true; }
 	}
 
 	@Override
