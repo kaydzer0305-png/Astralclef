@@ -3,15 +3,14 @@ package com.ezquest.astralclef.quests;
 /**
  * FTB Quests IDs for Create: Astral (pack Laskyyy/Create-Astral,
  * branch Astral-Experimental). Sourced from
- * {@code config/ftbquests/quests/chapters/6.snbt} (win chapter).
+ * {@code config/ftbquests/quests/chapters/*.snbt} (Astral-Experimental).
  * <p>
- * IDs are hex FTB Quests UIDs (file.getQuest(id)). Keep these in sync with the
- * pack SNBT when DevOS updates land. All quests below are from chapter 6
- * (filename {@code 6}, FTB chapter id {@code 7136A22A8137E1D1}).
- * <p>
- * Ch0.5–1 quest mapping for FTB “quests31” etc still needs explicit JEI/quest
- * dump from a live pack — placeholders until Research supplies the chapter_2
- * mapping. This file already covers the Ch6 win condition.
+ * IDs are hex FTB Quests UIDs (file.getQuest(id)). Keep in sync with the
+ * pack SNBT when DevOS updates land. Chapter files verified:
+ * {@code chapter_2} (547D8D23D3A6A883), {@code chapter_3} (3E0862BB5F2DDA3C),
+ * {@code chapter_4} (E1FF6BCB…), {@code chapter_5} (803CA4AE…), {@code 6}
+ * (7136A22A8137E1D1). Planet gates live in chapter_3 (Moon) and follow-on
+ * chapters 4/5 before Ch6.
  */
 public final class AstralQuests {
 	private AstralQuests() {}
@@ -30,6 +29,46 @@ public final class AstralQuests {
 	public static final String ROOT_OF_CONTINUITY = "0AE79E624EA78861";
 	/** Chapter 6 — observation holster. */
 	public static final String POLISHED_HOLSTER = "46620FE1375C7674";
+
+	// --- Chapter 2 (Getting Started — andesite/basin/mixer) ---
+	/** Chapter 2 file id. */
+	public static final String CHAPTER_2 = "547D8D23D3A6A883";
+	/** Ch2 — bronze ingot (bronze_smith). */
+	public static final String CH2_BRONZE_INGOT = "5268B7CCEDC48422";
+	/** Ch2 — cogwheel + shaft. */
+	public static final String CH2_COG_SHAFT = "515FDE185E1FB782";
+	/** Ch2 — mechanical_press + depot. */
+	public static final String CH2_PRESS_DEPOT = "6499CD689863283D";
+	/** Ch2 — andesite_casing (water_wheel gate). */
+	public static final String CH2_ANDESITE_CASING = "604CF717881C323A";
+	/** Ch2 — mechanical_mixer + basin (sturdy). */
+	public static final String CH2_MIXER_BASIN = "545BF28E82A07D19";
+	/** Ch2 — grout 32× (GROUT gate, unlocks Ch3). */
+	public static final String CH2_GROUT = "7354F2BFB2591ECF";
+	/** Ch2 — andesite_compound 3×. */
+	public static final String CH2_ANDESITE_COMPOUND = "76704C59FAFCD2E7";
+
+	// --- Chapter 3 (Moon — oxygen/rocket) ---
+	/** Chapter 3 file id. */
+	public static final String CHAPTER_3 = "3E0862BB5F2DDA3C";
+	/** Ch3 — fluid tank + pump (Create fluids). */
+	public static final String CH3_FLUID_TANK = "6AEEE2B22E28945B";
+	/** Ch3 — seared melter/heater (Tinkers). */
+	public static final String CH3_SEARED_MELTER = "0A34148EBAF329B3";
+	/** Ch3 — space suit set (oxygen gear gate). */
+	public static final String CH3_SPACE_SUIT = "624026189BBACBB0";
+	/** Ch3 — Moon dimension entry (ad_astra:moon, rewards copper casing etc). */
+	public static final String CH3_MOON_DIMENSION = "15B9947ABCCB882F";
+	/** Ch3 — shimmer bucket / compound_mixture bucket. */
+	public static final String CH3_SHIMMER_BUCKET = "00F3EA4A8FB5B11B";
+	/** Ch3 — electrolyser (Ad Astra O2). */
+	public static final String CH3_ELECTROLYSER = "343B8B2BF76B1D3B";
+
+	// --- Chapters 4/5 (Mars/Mercury) — file ids; quest lists mirror 6.snbt pattern, parse key gates on demand ---
+	/** Chapter 4 file id (Mars). */
+	public static final String CHAPTER_4 = "E1FF6BCB73E5DAF41F208E48AB94E46BD75322F0";
+	/** Chapter 5 file id (Mercury). */
+	public static final String CHAPTER_5 = "803CA4AE2C5AFA1084D2CC5BC598DC9C84C54034";
 
 	/** All Chapter 6 quest ids (useful for progress % in status). */
 	public static final String[] CHAPTER_6_ALL = {
