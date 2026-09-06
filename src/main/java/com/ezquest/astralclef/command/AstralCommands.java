@@ -7,6 +7,7 @@ import com.ezquest.astralclef.task.TaskRunner;
 import com.ezquest.astralclef.tasks.create.CreateRecipeExecutor;
 import com.ezquest.astralclef.tasks.create.world.CreateWorldContext;
 import com.ezquest.astralclef.tasks.phases.Ch01GettingStartedTask;
+import com.ezquest.astralclef.tasks.phases.ChMarsTask;
 import com.ezquest.astralclef.tasks.phases.ChMoonTask;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.context.CommandContext;
@@ -37,6 +38,8 @@ public final class AstralCommands {
 								.executes(AstralCommands::startCh01))
 						.then(CommandManager.literal("moon")
 								.executes(AstralCommands::startMoon))
+						.then(CommandManager.literal("mars")
+								.executes(AstralCommands::startMars))
 						.then(CommandManager.literal("cancel")
 								.executes(AstralCommands::cancel))
 						.then(CommandManager.literal("status")
@@ -60,6 +63,12 @@ public final class AstralCommands {
 	private static int startMoon(CommandContext<ServerCommandSource> ctx) {
 		TaskRunner.getInstance().runUserTask(new ChMoonTask());
 		ctx.getSource().sendFeedback(new LiteralText("Astralclef: started Moon phase"), true);
+		return 1;
+	}
+
+	private static int startMars(CommandContext<ServerCommandSource> ctx) {
+		TaskRunner.getInstance().runUserTask(new ChMarsTask());
+		ctx.getSource().sendFeedback(new LiteralText("Astralclef: started Mars phase"), true);
 		return 1;
 	}
 
