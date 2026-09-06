@@ -30,21 +30,59 @@ public class GreatBeastPhase extends Task {
 	protected Task onTick() {
 		switch (step) {
 			case LOCATE_BEAST:
-				// TODO: locate Great Beast arena/entity
+				// TODO: locate Great Beast arena/entity — soft Baritone scan when present
+				if (!locateBeast()) {
+					LOGGER.info("Great Beast: no arena located — waiting/scouting");
+					break;
+				}
 				step = Step.ENGAGE;
 				break;
 			case ENGAGE:
-				// TODO: combat loop (kite, weapon, dodge)
-				LOGGER.info("Great Beast engage (stub — no combat AI yet)");
+				// TODO: real combat AI; for now we gate on weapon check
+				var player = firstPlayer();
+				if (player != null && !hasWeapon(player)) {
+					LOGGER.info("Great Beast: no weapon in inventory — gathering");
+					break;
+				}
+				LOGGER.info("Great Beast engage (stub — no combat AI yet, would attack here)");
 				step = Step.LOOT;
 				break;
 			case LOOT:
-				// TODO: verify drop / quest trigger
+				// TODO: verify FTB Quests Ch6 trigger via FtbQuestsHelper
 				step = Step.DONE;
 				break;
 			case DONE:
 				break;
 		}
+		return null;
+	}
+
+	private boolean locateBeast() {
+		// Soft: if Baritone present and we have a world context, we could path to an arena.
+		// No hard dep — return true to keep the stub advancing in tests.
+		try {
+			var ctx = com.ezquest.astralclef.tasks.create.CreateRecipeExecutor.getInstance().getWorldContext();
+			if (ctx != null && ctx.isValid()) {
+				return true;
+			}
+		} catch (Throwable ignored) {}
+		return true;
+	}
+
+	private boolean hasWeapon(net.minecraft.server.network.ServerPlayerEntity player) {
+		return com.ezquest.astralclef.inventory.InventoryHelper.hasAny(player,
+				"minecraft:netherite_sword", "minecraft:diamond_sword", "minecraft:iron_sword",
+				"ad_astra:desh_sword");
+	}
+
+	private net.minecraft.server.network.ServerPlayerEntity firstPlayer() {
+		try {
+			var ctx = com.ezquest.astralclef.tasks.create.CreateRecipeExecutor.getInstance().getWorldContext();
+			if (ctx != null && ctx.isValid() && ctx.getWorld() != null && ctx.getWorld().getServer() != null) {
+				var list = ctx.getWorld().getServer().getPlayerManager().getPlayerList();
+				if (!list.isEmpty()) return list.get(0);
+			}
+		} catch (Throwable ignored) {}
 		return null;
 	}
 

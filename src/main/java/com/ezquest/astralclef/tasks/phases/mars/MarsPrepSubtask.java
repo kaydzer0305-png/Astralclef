@@ -2,6 +2,7 @@ package com.ezquest.astralclef.tasks.phases.mars;
 
 import com.ezquest.astralclef.task.Task;
 import com.ezquest.astralclef.world.AdAstraRoutes;
+import com.ezquest.astralclef.world.RocketHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -32,16 +33,27 @@ public final class MarsPrepSubtask extends Task {
 
 	@Override
 	protected Task onTick() {
+		var player = firstPlayer();
 		switch (step) {
 			case THERMAL_AND_OXYGEN:
-				// TODO: thermal padding, oxygen upgrades
+				if (player != null && !RocketHelper.hasOxygenGear(player)) {
+					LOGGER.info("Mars prep: missing thermal/oxygen — gathering");
+					break;
+				}
 				step = Step.T3_ROCKET;
 				break;
 			case T3_ROCKET:
-				// TODO: Ad Astra T3 assembly
+				if (player != null && !RocketHelper.hasRocket(player, AdAstraRoutes.Destination.MARS)) {
+					LOGGER.info("Mars prep: missing {}", RocketHelper.rocketIdFor(AdAstraRoutes.Destination.MARS));
+					break;
+				}
 				step = Step.FUEL_AND_PAD;
 				break;
 			case FUEL_AND_PAD:
+				if (player != null && !RocketHelper.hasFuel(player)) {
+					LOGGER.info("Mars prep: missing fuel");
+					break;
+				}
 				step = Step.LAUNCH;
 				break;
 			case LAUNCH:
@@ -51,6 +63,17 @@ public final class MarsPrepSubtask extends Task {
 			case DONE:
 				break;
 		}
+		return null;
+	}
+
+	private net.minecraft.server.network.ServerPlayerEntity firstPlayer() {
+		try {
+			var ctx = com.ezquest.astralclef.tasks.create.CreateRecipeExecutor.getInstance().getWorldContext();
+			if (ctx != null && ctx.isValid() && ctx.getWorld() != null && ctx.getWorld().getServer() != null) {
+				var list = ctx.getWorld().getServer().getPlayerManager().getPlayerList();
+				if (!list.isEmpty()) return list.get(0);
+			}
+		} catch (Throwable ignored) {}
 		return null;
 	}
 

@@ -111,6 +111,13 @@ public final class AstralCommands {
 		String createMsg = CreateRecipeExecutor.getInstance().statusSummary();
 		ctx.getSource().sendFeedback(new LiteralText("Astralclef task: " + taskMsg), false);
 		ctx.getSource().sendFeedback(new LiteralText("Create: " + createMsg), false);
+		// Soft helpers status (no hard deps)
+		try {
+			ctx.getSource().sendFeedback(new LiteralText(
+					com.ezquest.astralclef.quests.FtbQuestsHelper.status(ctx.getSource().getServer())), false);
+			ctx.getSource().sendFeedback(new LiteralText(
+					com.ezquest.astralclef.movement.BaritoneHelper.status()), false);
+		} catch (Throwable ignored) {}
 		return 1;
 	}
 

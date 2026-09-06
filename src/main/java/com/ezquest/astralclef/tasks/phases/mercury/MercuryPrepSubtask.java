@@ -2,6 +2,7 @@ package com.ezquest.astralclef.tasks.phases.mercury;
 
 import com.ezquest.astralclef.task.Task;
 import com.ezquest.astralclef.world.AdAstraRoutes;
+import com.ezquest.astralclef.world.RocketHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -20,13 +21,33 @@ public final class MercuryPrepSubtask extends Task {
 	}
 
 	@Override protected Task onTick() {
+		var player = firstPlayer();
 		switch (step) {
-			case EXTREME_THERMAL: step = Step.T4_ROCKET; break;
-			case T4_ROCKET: step = Step.FUEL_AND_PAD; break;
-			case FUEL_AND_PAD: step = Step.LAUNCH; break;
+			case EXTREME_THERMAL:
+				if (player != null && !RocketHelper.hasOxygenGear(player)) { LOGGER.info("Mercury prep: missing extreme thermal/oxygen"); break; }
+				step = Step.T4_ROCKET; break;
+			case T4_ROCKET:
+				if (player != null && !RocketHelper.hasRocket(player, AdAstraRoutes.Destination.MERCURY)) {
+					LOGGER.info("Mercury prep: missing {}", RocketHelper.rocketIdFor(AdAstraRoutes.Destination.MERCURY)); break;
+				}
+				step = Step.FUEL_AND_PAD; break;
+			case FUEL_AND_PAD:
+				if (player != null && !RocketHelper.hasFuel(player)) { LOGGER.info("Mercury prep: missing fuel"); break; }
+				step = Step.LAUNCH; break;
 			case LAUNCH: LOGGER.info("Mercury launch committed (stub)"); step = Step.DONE; break;
 			case DONE: break;
 		}
+		return null;
+	}
+
+	private net.minecraft.server.network.ServerPlayerEntity firstPlayer() {
+		try {
+			var ctx = com.ezquest.astralclef.tasks.create.CreateRecipeExecutor.getInstance().getWorldContext();
+			if (ctx != null && ctx.isValid() && ctx.getWorld() != null && ctx.getWorld().getServer() != null) {
+				var list = ctx.getWorld().getServer().getPlayerManager().getPlayerList();
+				if (!list.isEmpty()) return list.get(0);
+			}
+		} catch (Throwable ignored) {}
 		return null;
 	}
 
