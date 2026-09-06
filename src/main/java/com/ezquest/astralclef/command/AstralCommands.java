@@ -7,6 +7,7 @@ import com.ezquest.astralclef.task.TaskRunner;
 import com.ezquest.astralclef.tasks.create.CreateRecipeExecutor;
 import com.ezquest.astralclef.tasks.create.world.CreateWorldContext;
 import com.ezquest.astralclef.tasks.phases.Ch01GettingStartedTask;
+import com.ezquest.astralclef.tasks.phases.ChMoonTask;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.context.CommandContext;
 import net.fabricmc.fabric.api.command.v1.CommandRegistrationCallback;
@@ -34,6 +35,8 @@ public final class AstralCommands {
 				CommandManager.literal("astralclef")
 						.then(CommandManager.literal("ch01")
 								.executes(AstralCommands::startCh01))
+						.then(CommandManager.literal("moon")
+								.executes(AstralCommands::startMoon))
 						.then(CommandManager.literal("cancel")
 								.executes(AstralCommands::cancel))
 						.then(CommandManager.literal("status")
@@ -51,6 +54,12 @@ public final class AstralCommands {
 		ctx.getSource().sendFeedback(
 				new LiteralText("Astralclef: started Ch0.5–1 Getting Started (Create loop)"),
 				true);
+		return 1;
+	}
+
+	private static int startMoon(CommandContext<ServerCommandSource> ctx) {
+		TaskRunner.getInstance().runUserTask(new ChMoonTask());
+		ctx.getSource().sendFeedback(new LiteralText("Astralclef: started Moon phase"), true);
 		return 1;
 	}
 
