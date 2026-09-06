@@ -20,6 +20,7 @@ Runtime **requires Create** installed. Compile classpath includes Create via `bu
 
 | Phase | Focus | Status |
 |-------|--------|--------|
+| **Auto** | Full progression `ch01→moon→mars→mercury→singularity` | `FullProgressionTask` + `/astralclef auto` |
 | **Ch0.5–1** | Getting started (early Create + Astral basics) | Bindings + typed BE I/O + Create jobs |
 | Moon | Lunar progression | `ChMoonTask` `LAUNCH_PREP→LUNAR_SURFACE→MOON_DUNGEON` + `/astralclef moon` |
 | Mars | Martian progression | `ChMarsTask` `MARS_PREP→MARS_SURFACE→MARS_DUNGEON` + `/astralclef mars` |
@@ -103,12 +104,14 @@ Subtasks fire `CreateRecipeKinds` with bind ids and wait for job completion.
 
 | Command | Action |
 |---------|--------|
+| `/astralclef auto` | Full auto `ch01→moon→mars→mercury→singularity` (`FullProgressionTask`) |
 | `/astralclef ch01` | Start Ch0.5–1 via TaskRunner |
 | `/astralclef moon` | Start Moon (`ChMoonTask`) |
 | `/astralclef mars` | Start Mars (`ChMarsTask`) |
 | `/astralclef mercury` | Start Mercury (`ChMercuryTask`) |
 | `/astralclef singularity` | Start Singularity Ch6 win (`ChAstralSingularityTask`) |
 | `/astralclef beast` | Start Great Beast (`GreatBeastPhase`) |
+| `/astralclef gather <item> [count]` | Gather via `GatherTask`+`BlockLocator` (Baritone soft) |
 | `/astralclef status` | Show active task + Create job/context summary |
 | `/astralclef context` | Bind locate origin to your world + block pos |
 | `/astralclef cancel` | Cancel active task |

@@ -12,6 +12,7 @@ import com.ezquest.astralclef.tasks.phases.ChAstralSingularityTask;
 import com.ezquest.astralclef.tasks.phases.ChMarsTask;
 import com.ezquest.astralclef.tasks.phases.ChMercuryTask;
 import com.ezquest.astralclef.tasks.phases.ChMoonTask;
+import com.ezquest.astralclef.tasks.phases.FullProgressionTask;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.context.CommandContext;
 import net.fabricmc.fabric.api.command.v1.CommandRegistrationCallback;
@@ -37,6 +38,8 @@ public final class AstralCommands {
 			boolean dedicated) {
 		dispatcher.register(
 				CommandManager.literal("astralclef")
+						.then(CommandManager.literal("auto")
+								.executes(AstralCommands::startAuto))
 						.then(CommandManager.literal("ch01")
 								.executes(AstralCommands::startCh01))
 						.then(CommandManager.literal("moon")
@@ -64,6 +67,12 @@ public final class AstralCommands {
 								.executes(AstralCommands::manualTick))
 						.then(CommandManager.literal("recipes")
 								.executes(AstralCommands::dumpRecipes)));
+	}
+
+	private static int startAuto(CommandContext<ServerCommandSource> ctx) {
+		TaskRunner.getInstance().runUserTask(new FullProgressionTask());
+		ctx.getSource().sendFeedback(new LiteralText("Astralclef: started AUTO (ch01→moon→mars→mercury→singularity)"), true);
+		return 1;
 	}
 
 	private static int startCh01(CommandContext<ServerCommandSource> ctx) {
