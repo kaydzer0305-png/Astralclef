@@ -55,6 +55,17 @@ public final class LaunchPrepSubtask extends Task {
 				break;
 			case ROCKET_ASSEMBLY:
 				if (player != null && !RocketHelper.hasRocket(player, AdAstraRoutes.Destination.MOON)) {
+					// Prefer Create craft pipeline; fall back to GatherTask if no job accepted
+					if (com.ezquest.astralclef.world.RocketCraftHelper.tryCraftRocket(AdAstraRoutes.Destination.MOON)
+							&& !com.ezquest.astralclef.world.RocketCraftHelper.isCrafted(AdAstraRoutes.Destination.MOON)) {
+						LOGGER.info("Moon rocket: Create craft job in progress — {}", com.ezquest.astralclef.world.RocketCraftHelper.status(AdAstraRoutes.Destination.MOON));
+						break;
+					}
+					if (com.ezquest.astralclef.world.RocketCraftHelper.isCrafted(AdAstraRoutes.Destination.MOON)) {
+						gatherTask = null;
+						step = Step.FUEL_AND_PAD;
+						break;
+					}
 					if (gatherTask == null || gatherTask.isFinished()) {
 						gatherTask = new com.ezquest.astralclef.tasks.gather.GatherTask(
 								RocketHelper.rocketIdFor(AdAstraRoutes.Destination.MOON), 1);

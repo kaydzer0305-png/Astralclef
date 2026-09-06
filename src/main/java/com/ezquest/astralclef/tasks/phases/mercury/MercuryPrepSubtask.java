@@ -11,6 +11,7 @@ public final class MercuryPrepSubtask extends Task {
 
 	private enum Step { EXTREME_THERMAL, T4_ROCKET, FUEL_AND_PAD, LAUNCH, DONE }
 	private Step step = Step.EXTREME_THERMAL;
+	private Task gatherTask;
 
 	@Override public boolean isEqual(Task other) { return other instanceof MercuryPrepSubtask; }
 
@@ -24,19 +25,30 @@ public final class MercuryPrepSubtask extends Task {
 		var player = firstPlayer();
 		switch (step) {
 			case EXTREME_THERMAL:
-				if (player != null && !RocketHelper.hasOxygenGear(player)) { LOGGER.info("Mercury prep: missing extreme thermal/oxygen"); break; }
-				step = Step.T4_ROCKET; break;
+				if (player != null && !RocketHelper.hasOxygenGear(player)) {
+					if (gatherTask == null || gatherTask.isFinished()) gatherTask = new com.ezquest.astralclef.tasks.gather.GatherTask("ad_astra:oxygen_tank", 1);
+					return gatherTask;
+				}
+				gatherTask = null; step = Step.T4_ROCKET; break;
 			case T4_ROCKET:
 				if (player != null && !RocketHelper.hasRocket(player, AdAstraRoutes.Destination.MERCURY)) {
-					LOGGER.info("Mercury prep: missing {}", RocketHelper.rocketIdFor(AdAstraRoutes.Destination.MERCURY)); break;
+					if (com.ezquest.astralclef.world.RocketCraftHelper.tryCraftRocket(AdAstraRoutes.Destination.MERCURY)
+							&& !com.ezquest.astralclef.world.RocketCraftHelper.isCrafted(AdAstraRoutes.Destination.MERCURY)) break;
+					if (com.ezquest.astralclef.world.RocketCraftHelper.isCrafted(AdAstraRoutes.Destination.MERCURY)) { gatherTask = null; step = Step.FUEL_AND_PAD; break; }
+					if (gatherTask == null || gatherTask.isFinished()) gatherTask = new com.ezquest.astralclef.tasks.gather.GatherTask(RocketHelper.rocketIdFor(AdAstraRoutes.Destination.MERCURY), 1);
+					return gatherTask;
 				}
-				step = Step.FUEL_AND_PAD; break;
+				gatherTask = null; step = Step.FUEL_AND_PAD; break;
 			case FUEL_AND_PAD:
-				if (player != null && !RocketHelper.hasFuel(player)) { LOGGER.info("Mercury prep: missing fuel"); break; }
-				step = Step.LAUNCH; break;
+				if (player != null && !RocketHelper.hasFuel(player)) {
+					if (gatherTask == null || gatherTask.isFinished()) gatherTask = new com.ezquest.astralclef.tasks.gather.GatherTask("ad_astra:oil_bucket", 1);
+					return gatherTask;
+				}
+				gatherTask = null; step = Step.LAUNCH; break;
 			case LAUNCH: LOGGER.info("Mercury launch committed (stub)"); step = Step.DONE; break;
 			case DONE: break;
 		}
+		if (gatherTask != null && gatherTask.isFinished()) gatherTask = null;
 		return null;
 	}
 
@@ -51,7 +63,7 @@ public final class MercuryPrepSubtask extends Task {
 		return null;
 	}
 
-	@Override protected void onStop(Task interrupt) { LOGGER.debug("MercuryPrep stopped at {} (interrupt={})", step, interrupt); }
+	@Override protected void onStop(Task interrupt) { gatherTask = null; LOGGER.debug("MercuryPrep stopped at {} (interrupt={})", step, interrupt); }
 	@Override public boolean isFinished() { return step == Step.DONE; }
 	@Override protected String toDebugString() { return "MercuryPrep/" + step; }
 }

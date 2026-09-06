@@ -31,29 +31,50 @@ public final class MarsPrepSubtask extends Task {
 				AdAstraRoutes.routeFor(AdAstraRoutes.Destination.MARS));
 	}
 
+	private Task gatherTask;
+
 	@Override
 	protected Task onTick() {
 		var player = firstPlayer();
 		switch (step) {
 			case THERMAL_AND_OXYGEN:
 				if (player != null && !RocketHelper.hasOxygenGear(player)) {
-					LOGGER.info("Mars prep: missing thermal/oxygen — gathering");
-					break;
+					if (gatherTask == null || gatherTask.isFinished()) {
+						gatherTask = new com.ezquest.astralclef.tasks.gather.GatherTask("ad_astra:oxygen_tank", 1);
+					}
+					return gatherTask;
 				}
+				gatherTask = null;
 				step = Step.T3_ROCKET;
 				break;
 			case T3_ROCKET:
 				if (player != null && !RocketHelper.hasRocket(player, AdAstraRoutes.Destination.MARS)) {
-					LOGGER.info("Mars prep: missing {}", RocketHelper.rocketIdFor(AdAstraRoutes.Destination.MARS));
-					break;
+					if (com.ezquest.astralclef.world.RocketCraftHelper.tryCraftRocket(AdAstraRoutes.Destination.MARS)
+							&& !com.ezquest.astralclef.world.RocketCraftHelper.isCrafted(AdAstraRoutes.Destination.MARS)) {
+						break;
+					}
+					if (com.ezquest.astralclef.world.RocketCraftHelper.isCrafted(AdAstraRoutes.Destination.MARS)) {
+						gatherTask = null;
+						step = Step.FUEL_AND_PAD;
+						break;
+					}
+					if (gatherTask == null || gatherTask.isFinished()) {
+						gatherTask = new com.ezquest.astralclef.tasks.gather.GatherTask(
+								RocketHelper.rocketIdFor(AdAstraRoutes.Destination.MARS), 1);
+					}
+					return gatherTask;
 				}
+				gatherTask = null;
 				step = Step.FUEL_AND_PAD;
 				break;
 			case FUEL_AND_PAD:
 				if (player != null && !RocketHelper.hasFuel(player)) {
-					LOGGER.info("Mars prep: missing fuel");
-					break;
+					if (gatherTask == null || gatherTask.isFinished()) {
+						gatherTask = new com.ezquest.astralclef.tasks.gather.GatherTask("ad_astra:oil_bucket", 1);
+					}
+					return gatherTask;
 				}
+				gatherTask = null;
 				step = Step.LAUNCH;
 				break;
 			case LAUNCH:
@@ -63,6 +84,7 @@ public final class MarsPrepSubtask extends Task {
 			case DONE:
 				break;
 		}
+		if (gatherTask != null && gatherTask.isFinished()) gatherTask = null;
 		return null;
 	}
 
@@ -79,6 +101,7 @@ public final class MarsPrepSubtask extends Task {
 
 	@Override
 	protected void onStop(Task interrupt) {
+		gatherTask = null;
 		LOGGER.debug("MarsPrep stopped at {} (interrupt={})", step, interrupt);
 	}
 
