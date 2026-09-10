@@ -9,8 +9,11 @@ import com.ezquest.astralclef.tasks.create.world.CreateMachineIO;
 import com.ezquest.astralclef.tasks.create.world.CreateMachineLocator;
 import com.ezquest.astralclef.tasks.create.world.CreateMachineType;
 import com.ezquest.astralclef.tasks.create.world.CreateWorldContext;
+import com.ezquest.astralclef.bot.BotCrafting;
+import com.ezquest.astralclef.bot.BotSmelting;
 
 import net.minecraft.item.ItemStack;
+import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
 
@@ -213,6 +216,18 @@ public final class CreateRecipeJob {
 			fail("insert: block entity missing at " + machinePos.toShortString());
 			return true;
 		}
+		// Furnace jobs insert the smeltable but no fuel — stoke once from the
+		// player so the PROCESS poll can ever observe output.
+		if (kind == CreateRecipeKinds.Kind.COMPOUND_SMELT && ticksInStep <= 2) {
+			try {
+				ServerPlayerEntity fuelPlayer = firstPlayer(ctx);
+				if (fuelPlayer != null) {
+					BotSmelting.stokeFurnaceAt(ctx.getWorld(), machinePos, fuelPlayer);
+				}
+			} catch (Throwable t) {
+				LOGGER.debug("furnace stoke failed: {}", t.toString());
+			}
+		}
 		// Basin filter write (best-effort): set expected output as filter before inserting,
 		// so basin recipes with filters don't stall. Failure only logs.
 		if (!expectedOutput.isEmpty()) {
@@ -228,6 +243,7 @@ public final class CreateRecipeJob {
 		}
 		// Mechanical crafter shaped recipes: distribute ordered inputs across the 3x3 group
 		// in one tick instead of stuffing everything into a single crafter slot.
+		// Inputs come from the player when fully available (survival-legit), else binding seeds.
 		if (kind == CreateRecipeKinds.Kind.MECHANICAL_CRAFTING && !bindingInputs.isEmpty()) {
 			java.util.List<ItemStack> wanted = new java.util.ArrayList<>();
 			for (ItemStack s : bindingInputs) {
@@ -236,6 +252,7 @@ public final class CreateRecipeJob {
 				}
 			}
 			if (!wanted.isEmpty()) {
+				boolean sourced = takeAllFromPlayer(ctx, wanted);
 				java.util.List<ItemStack> leftover = CreateMachineIO.insertCrafterGroup(
 						ctx.getWorld(), machinePos, wanted);
 				boolean allEmpty = true;
@@ -245,9 +262,19 @@ public final class CreateRecipeJob {
 						break;
 					}
 				}
+				if (sourced && !allEmpty) {
+					// Real items that did not fit go straight back — never void them.
+					// Next tick re-takes the full set and retries.
+					for (ItemStack r : leftover) {
+						if (r != null && !r.isEmpty()) {
+							giveBackToPlayer(ctx, r.copy());
+						}
+					}
+				}
 				if (allEmpty) {
-					LOGGER.info("CreateRecipeJob {} [{}] INSERT crafter-group ok ({} slots) at {}",
-							recipeId, kind, wanted.size(), machinePos.toShortString());
+					LOGGER.info("CreateRecipeJob {} [{}] INSERT crafter-group ok ({} slots, {}) at {}",
+							recipeId, kind, wanted.size(), sourced ? "player inventory" : "binding seed",
+							machinePos.toShortString());
 					pendingInsert = ItemStack.EMPTY;
 					bindingInputIndex = bindingInputs.size();
 					return goTo(Step.PROCESS);
@@ -272,10 +299,22 @@ public final class CreateRecipeJob {
 		if (pendingInsert.isEmpty()) {
 			return goTo(Step.PROCESS);
 		}
-		ItemStack remaining = CreateMachineIO.insert(ctx.getWorld(), machinePos, pendingInsert);
+		// Survival economy: take the stack from the player when fully available;
+		// otherwise fall back to the binding seed (logged honestly).
+		ItemStack toInsert = pendingInsert.copy();
+		boolean sourced = false;
+		ItemStack taken = takeFromPlayer(ctx, pendingInsert);
+		if (!taken.isEmpty() && taken.getCount() >= pendingInsert.getCount()) {
+			toInsert = taken;
+			sourced = true;
+		} else if (!taken.isEmpty()) {
+			giveBackToPlayer(ctx, taken);
+		}
+		ItemStack remaining = CreateMachineIO.insert(ctx.getWorld(), machinePos, toInsert);
 		if (remaining.isEmpty()) {
-			LOGGER.info("CreateRecipeJob {} [{}] INSERT ok item {} at {}",
-					recipeId, kind, pendingInsert.getItem(), machinePos.toShortString());
+			LOGGER.info("CreateRecipeJob {} [{}] INSERT ok item {} x{} at {} ({})",
+					recipeId, kind, pendingInsert.getItem(), pendingInsert.getCount(), machinePos.toShortString(),
+					sourced ? "player inventory" : "binding seed");
 			pendingInsert = ItemStack.EMPTY;
 			bindingInputIndex++;
 			if (bindingInputIndex < bindingInputs.size()) {
@@ -285,7 +324,15 @@ public final class CreateRecipeJob {
 			}
 			return goTo(Step.PROCESS);
 		}
-		pendingInsert = remaining;
+		if (sourced) {
+			// Real items that did not fit go back; keep a copy as the re-take
+			// template (giveBack consumes the passed stack).
+			ItemStack retry = remaining.copy();
+			giveBackToPlayer(ctx, remaining);
+			pendingInsert = retry;
+		} else {
+			pendingInsert = remaining;
+		}
 		if (ticksInStep >= IO_TIMEOUT_TICKS) {
 			fail("insert: could not insert items into " + machinePos.toShortString());
 			return true;
@@ -408,12 +455,12 @@ public final class CreateRecipeJob {
 			return true;
 		}
 		if (expectsFluidOutput()) {
-			long got = CreateMachineIO.extractFluid(
-					ctx.getWorld(), machinePos, expectedFluidId, expectedFluidAmount);
-			if (got > 0) {
-				lastExtractedFluid = got;
-				LOGGER.info("CreateRecipeJob {} [{}] EXTRACT fluid {} x{} droplets",
-						recipeId, kind, expectedFluidId, got);
+			// Verify-only: leave the fluid in the basin for downstream use.
+			// (Destructively extracting here would void the player's fluid.)
+			if (CreateMachineIO.hasFluid(ctx.getWorld(), machinePos, expectedFluidId)) {
+				lastExtractedFluid = expectedFluidAmount;
+				LOGGER.info("CreateRecipeJob {} [{}] EXTRACT fluid {} observed (left in basin)",
+						recipeId, kind, expectedFluidId);
 				success = true;
 				failed = false;
 				return goTo(Step.DONE);
@@ -429,8 +476,12 @@ public final class CreateRecipeJob {
 		int want = expectedOutput.isEmpty() ? 64 : Math.max(1, expectedOutput.getCount());
 		ItemStack out = CreateMachineIO.extract(ctx.getWorld(), machinePos, filter, want);
 		if (!out.isEmpty()) {
+			// Products leave the machine — deliver them to the player,
+			// otherwise successful jobs would void their own output.
+			ItemStack deliver = out.copy();
 			lastExtracted = out;
-			LOGGER.info("CreateRecipeJob {} [{}] EXTRACT got {} x{}", recipeId, kind, out.getItem(), out.getCount());
+			giveBackToPlayer(ctx, deliver);
+			LOGGER.info("CreateRecipeJob {} [{}] EXTRACT got {} x{} (delivered to player)", recipeId, kind, out.getItem(), out.getCount());
 			success = true;
 			failed = false;
 			return goTo(Step.DONE);
@@ -496,6 +547,120 @@ public final class CreateRecipeJob {
 		this.failReason = reason != null ? reason : "unknown";
 		this.step = Step.DONE;
 		LOGGER.warn("CreateRecipeJob {} [{}] failed: {}", recipeId, kind, failReason);
+	}
+
+	/**
+	 * Survival economy: remove up to {@code wanted} from the first player's
+	 * inventory. Returns what was taken (possibly partial, possibly empty).
+	 */
+	private static ItemStack takeFromPlayer(CreateWorldContext ctx, ItemStack wanted) {
+		if (wanted == null || wanted.isEmpty()) {
+			return ItemStack.EMPTY;
+		}
+		ServerPlayerEntity player = firstPlayer(ctx);
+		if (player == null) {
+			return ItemStack.EMPTY;
+		}
+		try {
+			int need = wanted.getCount();
+			ItemStack taken = new ItemStack(wanted.getItem(), 0);
+			var inv = player.getInventory();
+			for (int i = 0; i < inv.size() && need > 0; i++) {
+				ItemStack s = inv.getStack(i);
+				if (!s.isEmpty() && ItemStack.canCombine(s, wanted)) {
+					int n = Math.min(s.getCount(), need);
+					taken.increment(n);
+					s.decrement(n);
+					need -= n;
+				}
+			}
+			if (taken.isEmpty()) {
+				return ItemStack.EMPTY;
+			}
+			inv.markDirty();
+			syncPlayer(player);
+			return taken;
+		} catch (Throwable t) {
+			LOGGER.debug("takeFromPlayer failed: {}", t.toString());
+			return ItemStack.EMPTY;
+		}
+	}
+
+	/**
+	 * Take every stack in {@code wanted} (in place) from the player.
+	 * All-or-nothing: on any shortfall everything is handed back and
+	 * the seeded copies stay untouched.
+	 *
+	 * @return true when every stack is now player-sourced
+	 */
+	private static boolean takeAllFromPlayer(CreateWorldContext ctx, java.util.List<ItemStack> wanted) {
+		ServerPlayerEntity player = firstPlayer(ctx);
+		if (player == null || wanted.isEmpty()) {
+			return false;
+		}
+		try {
+			// Pre-check counts first so a shortfall never half-drains the inventory.
+			var inv = player.getInventory();
+			for (ItemStack w : wanted) {
+				int need = w.getCount();
+				for (int i = 0; i < inv.size() && need > 0; i++) {
+					ItemStack s = inv.getStack(i);
+					if (!s.isEmpty() && ItemStack.canCombine(s, w)) {
+						need -= s.getCount();
+					}
+				}
+				if (need > 0) {
+					return false;
+				}
+			}
+			for (int k = 0; k < wanted.size(); k++) {
+				ItemStack w = wanted.get(k);
+				ItemStack taken = new ItemStack(w.getItem(), 0);
+				int need = w.getCount();
+				for (int i = 0; i < inv.size() && need > 0; i++) {
+					ItemStack s = inv.getStack(i);
+					if (!s.isEmpty() && ItemStack.canCombine(s, w)) {
+						int n = Math.min(s.getCount(), need);
+						taken.increment(n);
+						s.decrement(n);
+						need -= n;
+					}
+				}
+				wanted.set(k, taken);
+			}
+			inv.markDirty();
+			syncPlayer(player);
+			return true;
+		} catch (Throwable t) {
+			LOGGER.debug("takeAllFromPlayer failed: {}", t.toString());
+			return false;
+		}
+	}
+
+	private static void giveBackToPlayer(CreateWorldContext ctx, ItemStack stack) {
+		ServerPlayerEntity player = firstPlayer(ctx);
+		if (player != null && stack != null && !stack.isEmpty()) {
+			BotCrafting.giveToPlayer(player, stack);
+		}
+	}
+
+	private static ServerPlayerEntity firstPlayer(CreateWorldContext ctx) {
+		try {
+			if (ctx == null || !ctx.isValid() || ctx.getWorld() == null || ctx.getWorld().getServer() == null) {
+				return null;
+			}
+			var list = ctx.getWorld().getServer().getPlayerManager().getPlayerList();
+			return list.isEmpty() ? null : list.get(0);
+		} catch (Throwable ignored) {
+			return null;
+		}
+	}
+
+	private static void syncPlayer(ServerPlayerEntity player) {
+		try {
+			player.currentScreenHandler.sendContentUpdates();
+			player.playerScreenHandler.syncState();
+		} catch (Throwable ignored) {}
 	}
 
 	@Override

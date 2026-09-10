@@ -3,6 +3,9 @@ package com.ezquest.astralclef.tasks.phases.ch01;
 import com.ezquest.astralclef.task.Task;
 import com.ezquest.astralclef.tasks.create.CreateRecipeExecutor;
 import com.ezquest.astralclef.tasks.create.CreateRecipeKinds;
+import com.ezquest.astralclef.world.BlockPlacementHelper;
+import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.util.math.BlockPos;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -48,6 +51,9 @@ public final class MixerLoopSubtask extends Task {
 				CreateRecipeKinds.tryExecute(
 						CreateRecipeKinds.Kind.MECHANICAL_CRAFTING,
 						"create:crafting/kinetics/hand_crank");
+				if (!tryPlace("create:hand_crank") && !tryPlace("create:water_wheel")) {
+					LOGGER.debug("Mixer loop: no crank/water wheel item yet — deferring placement");
+				}
 				step = Step.MILL_PRESS_MIXER;
 				break;
 			case MILL_PRESS_MIXER:
@@ -60,6 +66,7 @@ public final class MixerLoopSubtask extends Task {
 				CreateRecipeKinds.tryExecute(
 						CreateRecipeKinds.Kind.MECHANICAL_CRAFTING,
 						"create:crafting/kinetics/mechanical_mixer");
+				tryPlace("create:mechanical_press");
 				step = Step.SHEETS_AND_UTILS;
 				break;
 			case SHEETS_AND_UTILS:
@@ -111,6 +118,31 @@ public final class MixerLoopSubtask extends Task {
 			LOGGER.warn("Mixer step {} finished without success — continuing", bindId);
 		}
 		return true;
+	}
+
+	private ServerPlayerEntity firstPlayer() {
+		try {
+			var ctx = CreateRecipeExecutor.getInstance().getWorldContext();
+			if (ctx != null && ctx.isValid() && ctx.getWorld() != null && ctx.getWorld().getServer() != null) {
+				var list = ctx.getWorld().getServer().getPlayerManager().getPlayerList();
+				if (!list.isEmpty()) return list.get(0);
+			}
+		} catch (Throwable ignored) {}
+		return null;
+	}
+
+	private boolean tryPlace(String blockId) {
+		try {
+			ServerPlayerEntity player = firstPlayer();
+			if (player == null) {
+				return false;
+			}
+			BlockPos pos = BlockPlacementHelper.findPlacePos(player, 3);
+			return BlockPlacementHelper.place(player, blockId, pos);
+		} catch (Throwable t) {
+			LOGGER.debug("tryPlace {} failed: {}", blockId, t.toString());
+			return false;
+		}
 	}
 
 	@Override

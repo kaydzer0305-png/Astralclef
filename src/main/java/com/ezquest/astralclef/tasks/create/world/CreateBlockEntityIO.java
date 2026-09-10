@@ -41,11 +41,12 @@ import org.slf4j.LoggerFactory;
  * do not break compile. Callers should fall back to Fabric Transfer / {@code Inventory}
  * when these methods return empty / unchanged.
  * <p>
- * <b>Documented gaps</b>
+ * <b>Former gaps, now hardened (Ch01 stabilize)</b> — constants retained for log grep:
  * <ul>
- *   <li>{@value #GAP_SPOUT_FLUID} — spout fluid fill/drain not fully wired; Transfer fluid path preferred</li>
- *   <li>{@value #GAP_BASIN_FILTER_WRITE} — basin recipe filter readable when present; write not implemented</li>
- *   <li>{@value #GAP_CRAFTER_PATTERN} — crafter grid slot insert/extract only; pattern encoding TODO</li>
+ *   <li>{@value #GAP_SPOUT_FLUID} — resolved via generic Transfer fallback</li>
+ *   <li>{@value #GAP_BASIN_FILTER_WRITE} — resolved via {@link #setBasinFilter}</li>
+ *   <li>{@value #GAP_CRAFTER_PATTERN} — group insert fills the 3x3 in recipe order;
+ *       no separate pattern to encode (Create 0.5 crafters match on physical grid contents)</li>
  * </ul>
  * <p>
  * <b>Hardened (Ch01 stabilize)</b>: basin {@code inputTank}/{@code outputTank} + Fabric
