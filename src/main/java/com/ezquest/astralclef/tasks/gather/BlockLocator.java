@@ -25,6 +25,11 @@ public final class BlockLocator {
 	public record Result(BlockPos pos, String blockId, double distSq) {}
 
 	public static Result findNearest(ServerPlayerEntity player, List<String> blockIds, int radius) {
+		return findNearest(player, blockIds, radius, null);
+	}
+
+	public static Result findNearest(ServerPlayerEntity player, List<String> blockIds, int radius,
+			java.util.Set<BlockPos> exclude) {
 		if (player == null || blockIds == null || blockIds.isEmpty() || radius <= 0) {
 			return null;
 		}
@@ -42,7 +47,9 @@ public final class BlockLocator {
 			for (int dy = -radius; dy <= radius; dy++) {
 				for (int dz = -radius; dz <= radius; dz++) {
 					m.set(origin.getX() + dx, origin.getY() + dy, origin.getZ() + dz);
-					var state = world.getBlockState(m);
+					if (exclude != null && exclude.contains(m)) {
+						continue;
+					}var state = world.getBlockState(m);
 					Block b = state.getBlock();
 					if (!targets.contains(b)) {
 						continue;

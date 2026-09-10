@@ -1,15 +1,22 @@
 package com.ezquest.astralclef.tasks.gather;
 
+import com.ezquest.astralclef.bot.BotActions;
+import com.ezquest.astralclef.bot.BotMovement;
 import com.ezquest.astralclef.inventory.InventoryHelper;
 import com.ezquest.astralclef.movement.BaritoneHelper;
 import com.ezquest.astralclef.task.Task;
 import com.ezquest.astralclef.tasks.create.CreateRecipeExecutor;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Vec3d;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Generic gather primitive: wait until player has {@code count}×{@code itemId},
@@ -30,6 +37,11 @@ public final class GatherTask extends Task {
 
 	private int ticks;
 	private boolean warned;
+	/** Unbreakable/unreachable targets to skip while scanning. */
+	private final Set<BlockPos> skip = new HashSet<>();
+	private final Map<BlockPos, Integer> breakFails = new HashMap<>();
+	private BlockPos moveTarget;
+	private int moveAttempts;
 
 	public GatherTask(String itemId, int count) {
 		this(itemId, count, blockIdsFor(itemId), 24, 600);
@@ -61,6 +73,10 @@ public final class GatherTask extends Task {
 	protected void onStart() {
 		ticks = 0;
 		warned = false;
+		skip.clear();
+		breakFails.clear();
+		moveTarget = null;
+		moveAttempts = 0;
 		LOGGER.info("Gather {} x{} — searching {} within {} (Baritone={})",
 				itemId, count, blockIds.isEmpty() ? "inventory only" : blockIds, searchRadius, BaritoneHelper.isPresent());
 	}
@@ -83,27 +99,77 @@ public final class GatherTask extends Task {
 			// Return null to stay alive; isFinished stays false.
 			return null;
 		}
-		if (player != null && !blockIds.isEmpty() && ticks % 20 == 1) {
-			BlockLocator.Result found = BlockLocator.findNearest(player, blockIds, searchRadius);
-			if (found != null) {
-				LOGGER.info("Gather {}: nearest {} at {} (dist {})", itemId, found.blockId(), found.pos().toShortString(), String.format("%.1f", Math.sqrt(found.distSq())));
-				if (BaritoneHelper.isPresent()) {
-					// Try MineProcess first (mines the ore), fall back to pathTo
-					java.util.List<net.minecraft.block.Block> blocks = resolveBlocks(blockIds);
-					if (!blocks.isEmpty() && BaritoneHelper.mineBlocks(player, blocks, count)) {
-						LOGGER.info("Gather {}: Baritone MineProcess queued for {}", itemId, blocks);
-					} else {
-						BaritoneHelper.pathTo(player, found.pos());
-					}
-				}
-			} else if (ticks % 100 == 1) {
-				LOGGER.debug("Gather {}: no {} within {}", itemId, blockIds, searchRadius);
+		if (player == null || blockIds.isEmpty()) {
+			if (ticks % 100 == 1 && player != null) {
+				LOGGER.info("Gather {} x{} waiting — have {} / {} (tick {}/{})", itemId, count, InventoryHelper.countItem(player, itemId), count, ticks, timeoutTicks);
 			}
+			return null;
 		}
-		if (ticks % 100 == 1 && player != null) {
+		BotActions.eatIfHungry(player);
+		// Throttle world scans + movement to every 5 ticks.
+		if (ticks % 5 == 1) {
+			workTarget(player);
+		}
+		if (ticks % 100 == 1) {
 			LOGGER.info("Gather {} x{} waiting — have {} / {} (tick {}/{})", itemId, count, InventoryHelper.countItem(player, itemId), count, ticks, timeoutTicks);
 		}
 		return null;
+	}
+
+	/** One scan → move → break cycle toward the nearest matching block. */
+	private void workTarget(ServerPlayerEntity player) {
+		BlockLocator.Result found = BlockLocator.findNearest(player, blockIds, searchRadius, skip);
+		if (found == null) {
+			if (ticks % 100 == 1) {
+				LOGGER.debug("Gather {}: no {} within {}", itemId, blockIds, searchRadius);
+			}
+			return;
+		}
+		if (ticks % 20 == 1) {
+			LOGGER.info("Gather {}: nearest {} at {} (dist {})", itemId, found.blockId(), found.pos().toShortString(), String.format("%.1f", Math.sqrt(found.distSq())));
+		}
+		if (BaritoneHelper.isPresent()) {
+			// Try MineProcess first (mines the ore), fall back to pathTo
+			java.util.List<net.minecraft.block.Block> blocks = resolveBlocks(blockIds);
+			if (!blocks.isEmpty() && BaritoneHelper.mineBlocks(player, blocks, count)) {
+				LOGGER.info("Gather {}: Baritone MineProcess queued for {}", itemId, blocks);
+			} else {
+				BaritoneHelper.pathTo(player, found.pos());
+			}
+			return;
+		}
+		// Autonomous fallback: walk into vacuum range, then survival-break.
+		double distCenter = Math.sqrt(player.squaredDistanceTo(Vec3d.ofCenter(found.pos())));
+		if (distCenter > 2.2) {
+			if (!found.pos().equals(moveTarget)) {
+				moveTarget = found.pos();
+				moveAttempts = 0;
+			}
+			moveAttempts++;
+			if (moveAttempts > 80) {
+				LOGGER.info("Gather {}: cannot reach {} at {} — skipping", itemId, found.blockId(), found.pos().toShortString());
+				skip.add(found.pos());
+				moveTarget = null;
+				moveAttempts = 0;
+				return;
+			}
+			BotMovement.stepToward(player, found.pos(), 2.0, 3.0);
+			return;
+		}
+		moveTarget = null;
+		moveAttempts = 0;
+		if (BotActions.breakBlock(player, found.pos())) {
+			breakFails.remove(found.pos());
+		} else {
+			int fails = breakFails.getOrDefault(found.pos(), 0) + 1;
+			if (fails >= 3) {
+				LOGGER.info("Gather {}: giving up on {} at {} (unbreakable?)", itemId, found.blockId(), found.pos().toShortString());
+				skip.add(found.pos());
+				breakFails.remove(found.pos());
+			} else {
+				breakFails.put(found.pos(), fails);
+			}
+		}
 	}
 
 	@Override
@@ -153,18 +219,29 @@ public final class GatherTask extends Task {
 	public static List<String> blockIdsFor(String itemId) {
 		if (itemId == null) return List.of();
 		return switch (itemId) {
-			case "minecraft:iron_ingot" -> List.of("minecraft:iron_ore", "minecraft:deepslate_iron_ore");
-			case "minecraft:copper_ingot" -> List.of("minecraft:copper_ore", "minecraft:deepslate_copper_ore");
-			case "minecraft:gold_ingot" -> List.of("minecraft:gold_ore", "minecraft:deepslate_gold_ore", "minecraft:nether_gold_ore");
+			case "minecraft:iron_ingot", "minecraft:raw_iron", "minecraft:iron_nugget" ->
+					List.of("minecraft:iron_ore", "minecraft:deepslate_iron_ore");
+			case "minecraft:copper_ingot", "minecraft:raw_copper" ->
+					List.of("minecraft:copper_ore", "minecraft:deepslate_copper_ore");
+			case "minecraft:gold_ingot", "minecraft:raw_gold", "minecraft:gold_nugget" ->
+					List.of("minecraft:gold_ore", "minecraft:deepslate_gold_ore", "minecraft:nether_gold_ore");
 			case "minecraft:diamond" -> List.of("minecraft:diamond_ore", "minecraft:deepslate_diamond_ore");
-			case "minecraft:netherite_ingot" -> List.of("minecraft:ancient_debris");
+			case "minecraft:netherite_ingot", "minecraft:netherite_scrap" -> List.of("minecraft:ancient_debris");
 			case "minecraft:netherite_sword", "minecraft:diamond_sword" -> List.of("minecraft:diamond_ore", "minecraft:ancient_debris");
-			case "ad_astra:desh_ingot" -> List.of("ad_astra:moon_desh_ore", "ad_astra:mars_desh_ore", "ad_astra:desh_ore");
-			case "ad_astra:ostrum_ingot" -> List.of("ad_astra:mars_ostrum_ore");
-			case "ad_astra:calorite_ingot" -> List.of("ad_astra:venus_calorite_ore", "ad_astra:mercury_calorite_ore");
+			case "ad_astra:desh_ingot", "ad_astra:raw_desh" ->
+					List.of("ad_astra:moon_desh_ore", "ad_astra:mars_desh_ore", "ad_astra:desh_ore", "ad_astra:deepslate_desh_ore");
+			case "ad_astra:ostrum_ingot", "ad_astra:raw_ostrum" ->
+					List.of("ad_astra:mars_ostrum_ore", "ad_astra:deepslate_ostrum_ore");
+			case "ad_astra:calorite_ingot", "ad_astra:raw_calorite" ->
+					List.of("ad_astra:venus_calorite_ore", "ad_astra:mercury_calorite_ore", "ad_astra:deepslate_calorite_ore");
 			case "minecraft:gravel" -> List.of("minecraft:gravel");
 			case "minecraft:clay_ball" -> List.of("minecraft:clay");
-			case "techreborn:tin_ingot" -> List.of("techreborn:tin_ore");
+			case "minecraft:andesite" -> List.of("minecraft:andesite");
+			case "minecraft:cobblestone" -> List.of("minecraft:cobblestone", "minecraft:stone");
+			case "minecraft:coal" -> List.of("minecraft:coal_ore", "minecraft:deepslate_coal_ore");
+			case "create:zinc_ingot", "create:zinc_nugget", "create:raw_zinc" ->
+					List.of("create:zinc_ore", "create:deepslate_zinc_ore");
+			case "techreborn:tin_ingot", "techreborn:raw_tin" -> List.of("techreborn:tin_ore");
 			default -> List.of();
 		};
 	}
