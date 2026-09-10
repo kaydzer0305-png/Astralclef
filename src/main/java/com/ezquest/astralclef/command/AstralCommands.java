@@ -71,7 +71,7 @@ public final class AstralCommands {
 
 	private static int startAuto(CommandContext<ServerCommandSource> ctx) {
 		TaskRunner.getInstance().runUserTask(new FullProgressionTask());
-		ctx.getSource().sendFeedback(new LiteralText("Astralclef: started AUTO (ch01→moon→mars→mercury→singularity)"), true);
+		ctx.getSource().sendFeedback(new LiteralText("Astralclef: started AUTO (ch01->moon->mars->mercury->singularity)"), true);
 		return 1;
 	}
 
@@ -172,12 +172,12 @@ public final class AstralCommands {
 		CreateRecipeExecutor.getInstance().tick(ctx.getSource().getServer());
 		Task task = TaskRunner.getInstance().getUserTask();
 		String msg = task == null ? "idle (finished or none)" : task.toString();
-		ctx.getSource().sendFeedback(new LiteralText("Astralclef tick → " + msg), false);
+		ctx.getSource().sendFeedback(new LiteralText("Astralclef tick -> " + msg), false);
 		ctx.getSource().sendFeedback(new LiteralText(CreateRecipeExecutor.getInstance().statusSummary()), false);
 		return 1;
 	}
 
-	/** Dump Ch01 bind → resolved RecipeManager pack ids (REI-friendly confirm). */
+	/** Dump Ch01 bind -> resolved RecipeManager pack ids (REI-friendly confirm). */
 	private static int dumpRecipes(CommandContext<ServerCommandSource> ctx) {
 		java.util.List<String> lines = Ch01RecipeBindings.dumpCh01(ctx.getSource().getServer());
 		for (String line : lines) {
