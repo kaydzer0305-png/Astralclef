@@ -2,9 +2,11 @@ package com.ezquest.astralclef.world;
 
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.tag.TagKey;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.registry.Registry;
+import net.minecraft.world.gen.feature.ConfiguredStructureFeature;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,6 +31,19 @@ public final class StructureLocator {
 		Identifier id = Identifier.tryParse(structureId);
 		if (id == null) {
 			return null;
+		}
+		// 1.18.2 direct path: ServerWorld.locateStructure(TagKey, BlockPos, int, boolean).
+		// Missing/empty tags yield null (soft) — e.g. modded structure ids.
+		try {
+			TagKey<ConfiguredStructureFeature<?, ?>> tag =
+					TagKey.of(Registry.CONFIGURED_STRUCTURE_FEATURE_KEY, id);
+			BlockPos found = world.locateStructure(tag, origin, 100, false);
+			if (found != null) {
+				LOGGER.info("StructureLocator {} -> {}", structureId, found.toShortString());
+				return found;
+			}
+		} catch (Throwable t) {
+			LOGGER.debug("StructureLocator direct locate failed for {}: {}", structureId, t.toString());
 		}
 		// 1.18.2 vanilla: world.locateStructure(Structure, center, radius, skipExisting)
 		// Try several signatures via reflection so we don't hard-depend on Yarn mappings.

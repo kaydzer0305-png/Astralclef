@@ -6,12 +6,19 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Ad Astra rocket checks. Uses inventory counts as soft gating; real
- * structure validation (pad, fuel) is TODO and will be wired when the
- * Ad Astra block entities are queryable.
+ * Ad Astra rocket checks. Inventory counts gate rockets/oxygen/fuel;
+ * launch-pad presence is validated by scanning for the placed pad block
+ * near the player (soft — false when Ad Astra is absent).
  */
 public final class RocketHelper {
 	private static final Logger LOGGER = LoggerFactory.getLogger("astralclef/rocket");
+
+	/** Ad Astra launch pad block id. */
+	public static final String LAUNCH_PAD = "ad_astra:launch_pad";
+	/** Ad Astra NASA workbench block id (rocket assembly station). */
+	public static final String NASA_WORKBENCH = "ad_astra:nasa_workbench";
+	/** Pad scan radius (blocks) around the player. */
+	public static final int PAD_SCAN_RADIUS = 12;
 
 	private RocketHelper() {}
 
@@ -47,5 +54,33 @@ public final class RocketHelper {
 				"ad_astra:fuel_bucket",
 				"ad_astra:oil_bucket",
 				"minecraft:lava_bucket");
+	}
+
+	/**
+	 * Whether a launch pad block exists near the player.
+	 * Soft — false when the player is null or Ad Astra is absent/unregistered.
+	 */
+	public static boolean hasLaunchPad(ServerPlayerEntity player) {
+		if (player == null) {
+			return false;
+		}
+		boolean found = BlockPlacementHelper.findBlockNearby(player, LAUNCH_PAD, PAD_SCAN_RADIUS) != null;
+		if (!found) {
+			LOGGER.debug("no {} within {} blocks of player", LAUNCH_PAD, PAD_SCAN_RADIUS);
+		}
+		return found;
+	}
+
+	/**
+	 * Whether a NASA workbench exists near the player (rocket assembly).
+	 * Soft — false when the player is null or Ad Astra is absent/unregistered.
+	 * Slot-driving the workbench needs Ad Astra internals (not on the compile
+	 * classpath), so callers treat this as a guidance gate, not automation.
+	 */
+	public static boolean hasWorkbench(ServerPlayerEntity player) {
+		if (player == null) {
+			return false;
+		}
+		return BlockPlacementHelper.findBlockNearby(player, NASA_WORKBENCH, PAD_SCAN_RADIUS) != null;
 	}
 }

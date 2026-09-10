@@ -1,7 +1,11 @@
 package com.ezquest.astralclef.tasks.phases.moon;
 
+import com.ezquest.astralclef.quests.AstralQuests;
 import com.ezquest.astralclef.task.Task;
+import com.ezquest.astralclef.tasks.create.CreateRecipeExecutor;
+import com.ezquest.astralclef.tasks.gather.GatherTask;
 import com.ezquest.astralclef.world.AdAstraRoutes;
+import com.ezquest.astralclef.world.RocketCraftHelper;
 import com.ezquest.astralclef.world.RocketHelper;
 import net.minecraft.server.network.ServerPlayerEntity;
 import org.slf4j.Logger;
@@ -9,7 +13,7 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Launch prep: oxygen, suit, rocket assembly, fueling, launch pad.
- * Now soft-checks player inventory (rocket, oxygen, fuel) when a server
+ * Soft-checks player inventory (rocket, oxygen, fuel) when a server
  * player is available; stubs degrade gracefully when absent (unit tests).
  */
 public final class LaunchPrepSubtask extends Task {
@@ -25,6 +29,7 @@ public final class LaunchPrepSubtask extends Task {
 
 	private Step step = Step.OXYGEN_AND_SUIT;
 	private Task gatherTask;
+	private int ticks;
 
 	@Override
 	public boolean isEqual(Task other) {
@@ -34,18 +39,21 @@ public final class LaunchPrepSubtask extends Task {
 	@Override
 	protected void onStart() {
 		step = Step.OXYGEN_AND_SUIT;
+		gatherTask = null;
+		ticks = 0;
 		LOGGER.info("Moon launch prep: oxygen/suit → rocket → fuel/pad → launch ({})",
 				AdAstraRoutes.routeFor(AdAstraRoutes.Destination.MOON));
 	}
 
 	@Override
 	protected Task onTick() {
+		ticks++;
 		ServerPlayerEntity player = firstPlayer();
 		switch (step) {
 			case OXYGEN_AND_SUIT:
 				if (player != null && !RocketHelper.hasOxygenGear(player)) {
 					if (gatherTask == null || gatherTask.isFinished()) {
-						gatherTask = new com.ezquest.astralclef.tasks.gather.GatherTask("ad_astra:oxygen_tank", 1);
+						gatherTask = new GatherTask("ad_astra:oxygen_tank", 1);
 						LOGGER.info("Moon launch prep: delegating to GatherTask for oxygen gear");
 					}
 					return gatherTask;
@@ -56,19 +64,24 @@ public final class LaunchPrepSubtask extends Task {
 			case ROCKET_ASSEMBLY:
 				if (player != null && !RocketHelper.hasRocket(player, AdAstraRoutes.Destination.MOON)) {
 					// Prefer Create craft pipeline; fall back to GatherTask if no job accepted
-					if (com.ezquest.astralclef.world.RocketCraftHelper.tryCraftRocket(AdAstraRoutes.Destination.MOON)
-							&& !com.ezquest.astralclef.world.RocketCraftHelper.isCrafted(AdAstraRoutes.Destination.MOON)) {
-						LOGGER.info("Moon rocket: Create craft job in progress — {}", com.ezquest.astralclef.world.RocketCraftHelper.status(AdAstraRoutes.Destination.MOON));
+					if (RocketCraftHelper.tryCraftRocket(AdAstraRoutes.Destination.MOON)
+							&& !RocketCraftHelper.isCrafted(AdAstraRoutes.Destination.MOON)) {
+						LOGGER.info("Moon rocket: Create craft job in progress — {}", RocketCraftHelper.status(AdAstraRoutes.Destination.MOON));
 						break;
 					}
-					if (com.ezquest.astralclef.world.RocketCraftHelper.isCrafted(AdAstraRoutes.Destination.MOON)) {
+					if (RocketCraftHelper.isCrafted(AdAstraRoutes.Destination.MOON)) {
 						gatherTask = null;
 						step = Step.FUEL_AND_PAD;
 						break;
 					}
 					if (gatherTask == null || gatherTask.isFinished()) {
-						gatherTask = new com.ezquest.astralclef.tasks.gather.GatherTask(
+						gatherTask = new GatherTask(
 								RocketHelper.rocketIdFor(AdAstraRoutes.Destination.MOON), 1);
+					}
+					if (ticks % 100 == 1) {
+						LOGGER.info("Moon rocket: assemble {} at a {} (workbench nearby: {})",
+								RocketHelper.rocketIdFor(AdAstraRoutes.Destination.MOON),
+								RocketHelper.NASA_WORKBENCH, RocketHelper.hasWorkbench(player));
 					}
 					return gatherTask;
 				}
@@ -78,9 +91,16 @@ public final class LaunchPrepSubtask extends Task {
 			case FUEL_AND_PAD:
 				if (player != null && !RocketHelper.hasFuel(player)) {
 					if (gatherTask == null || gatherTask.isFinished()) {
-						gatherTask = new com.ezquest.astralclef.tasks.gather.GatherTask("ad_astra:oil_bucket", 1);
+						gatherTask = new GatherTask("ad_astra:oil_bucket", 1);
 					}
 					return gatherTask;
+				}
+				if (player != null && !RocketHelper.hasLaunchPad(player)) {
+					if (ticks % 100 == 1) {
+						LOGGER.info("Moon launch prep: place {} nearby (FTB pad quest {})",
+								RocketHelper.LAUNCH_PAD, AstralQuests.CH4_LAUNCH_PAD);
+					}
+					break;
 				}
 				gatherTask = null;
 				step = Step.LAUNCH;
@@ -100,7 +120,7 @@ public final class LaunchPrepSubtask extends Task {
 
 	private ServerPlayerEntity firstPlayer() {
 		try {
-			var ctx = com.ezquest.astralclef.tasks.create.CreateRecipeExecutor.getInstance().getWorldContext();
+			var ctx = CreateRecipeExecutor.getInstance().getWorldContext();
 			if (ctx != null && ctx.isValid() && ctx.getWorld() != null && ctx.getWorld().getServer() != null) {
 				var list = ctx.getWorld().getServer().getPlayerManager().getPlayerList();
 				if (!list.isEmpty()) {

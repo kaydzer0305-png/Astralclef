@@ -1,8 +1,14 @@
 package com.ezquest.astralclef.tasks.phases.moon;
 
+import com.ezquest.astralclef.inventory.InventoryHelper;
 import com.ezquest.astralclef.movement.BaritoneHelper;
+import com.ezquest.astralclef.quests.AstralQuests;
+import com.ezquest.astralclef.quests.FtbQuestsHelper;
 import com.ezquest.astralclef.task.Task;
+import com.ezquest.astralclef.tasks.create.CreateRecipeExecutor;
+import com.ezquest.astralclef.tasks.gather.GatherTask;
 import com.ezquest.astralclef.world.StructureLocator;
+import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.util.math.BlockPos;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,6 +30,8 @@ public final class MoonDungeonSubtask extends Task {
 
 	private Step step = Step.LOCATE_DUNGEON;
 	private BlockPos dungeonPos;
+	private Task gatherTask;
+	private int ticks;
 
 	@Override
 	public boolean isEqual(Task other) {
@@ -33,11 +41,14 @@ public final class MoonDungeonSubtask extends Task {
 	@Override
 	protected void onStart() {
 		step = Step.LOCATE_DUNGEON;
+		gatherTask = null;
+		ticks = 0;
 		LOGGER.info("Moon dungeon/return begun");
 	}
 
 	@Override
 	protected Task onTick() {
+		ticks++;
 		var player = firstPlayer();
 		switch (step) {
 			case LOCATE_DUNGEON:
@@ -74,9 +85,24 @@ public final class MoonDungeonSubtask extends Task {
 				step = Step.CLEAR_DUNGEON;
 				break;
 			case CLEAR_DUNGEON:
-				// TODO: combat/loot + FTB quest check
-				step = Step.RETURN;
-				break;
+				// Clear = hold moon loot (desh) or the Ch4 desh quest; otherwise
+				// stockpile desh and wait (no automated combat in this stub).
+				if (player == null
+						|| InventoryHelper.hasAny(player, "ad_astra:desh_ingot", "ad_astra:raw_desh")
+						|| isQuestDone(AstralQuests.CH4_DESH)) {
+					gatherTask = null;
+					step = Step.RETURN;
+					break;
+				}
+				if (gatherTask == null || gatherTask.isFinished()) {
+					gatherTask = new GatherTask("ad_astra:desh_ingot", 4);
+					LOGGER.info("Moon dungeon: stockpiling desh loot via GatherTask");
+				}
+				if (ticks % 100 == 1) {
+					LOGGER.info("Moon dungeon: clear the dungeon and loot desh (quest {})",
+							AstralQuests.CH4_DESH);
+				}
+				return gatherTask;
 			case RETURN:
 				LOGGER.info("Moon return gate complete (soft — structure cases handled)");
 				step = Step.DONE;
@@ -84,12 +110,15 @@ public final class MoonDungeonSubtask extends Task {
 			case DONE:
 				break;
 		}
+		if (gatherTask != null && gatherTask.isFinished()) {
+			gatherTask = null;
+		}
 		return null;
 	}
 
-	private net.minecraft.server.network.ServerPlayerEntity firstPlayer() {
+	private ServerPlayerEntity firstPlayer() {
 		try {
-			var ctx = com.ezquest.astralclef.tasks.create.CreateRecipeExecutor.getInstance().getWorldContext();
+			var ctx = CreateRecipeExecutor.getInstance().getWorldContext();
 			if (ctx != null && ctx.isValid() && ctx.getWorld() != null && ctx.getWorld().getServer() != null) {
 				var list = ctx.getWorld().getServer().getPlayerManager().getPlayerList();
 				if (!list.isEmpty()) return list.get(0);
@@ -98,8 +127,30 @@ public final class MoonDungeonSubtask extends Task {
 		return null;
 	}
 
+	private boolean isQuestDone(String questId) {
+		try {
+			var ctx = CreateRecipeExecutor.getInstance().getWorldContext();
+			if (ctx == null || !ctx.isValid() || ctx.getWorld() == null || ctx.getWorld().getServer() == null) {
+				return false;
+			}
+			var server = ctx.getWorld().getServer();
+			if (!FtbQuestsHelper.isQuestsPresent(server)) {
+				return false;
+			}
+			var player = server.getPlayerManager().getPlayerList().isEmpty()
+					? null : server.getPlayerManager().getPlayerList().get(0);
+			if (player == null) {
+				return false;
+			}
+			return FtbQuestsHelper.isQuestComplete(server, player, questId);
+		} catch (Throwable t) {
+			return false;
+		}
+	}
+
 	@Override
 	protected void onStop(Task interrupt) {
+		gatherTask = null;
 		LOGGER.debug("MoonDungeon stopped at {} (interrupt={})", step, interrupt);
 	}
 

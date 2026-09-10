@@ -1,8 +1,11 @@
 package com.ezquest.astralclef.tasks.phases.mars;
 
+import com.ezquest.astralclef.inventory.InventoryHelper;
 import com.ezquest.astralclef.movement.BaritoneHelper;
 import com.ezquest.astralclef.task.Task;
+import com.ezquest.astralclef.tasks.gather.GatherTask;
 import com.ezquest.astralclef.world.StructureLocator;
+import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.util.math.BlockPos;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,6 +23,8 @@ public final class MarsDungeonSubtask extends Task {
 
 	private Step step = Step.LOCATE_DUNGEON;
 	private BlockPos dungeonPos;
+	private Task gatherTask;
+	private int ticks;
 
 	@Override
 	public boolean isEqual(Task other) {
@@ -29,11 +34,14 @@ public final class MarsDungeonSubtask extends Task {
 	@Override
 	protected void onStart() {
 		step = Step.LOCATE_DUNGEON;
+		gatherTask = null;
+		ticks = 0;
 		LOGGER.info("Mars dungeon/return begun");
 	}
 
 	@Override
 	protected Task onTick() {
+		ticks++;
 		var player = firstPlayer();
 		switch (step) {
 			case LOCATE_DUNGEON:
@@ -53,8 +61,22 @@ public final class MarsDungeonSubtask extends Task {
 				step = Step.CLEAR_DUNGEON;
 				break;
 			case CLEAR_DUNGEON:
-				step = Step.RETURN;
-				break;
+				// Clear = hold Mars loot (ostrum); otherwise stockpile ostrum and
+				// wait (no automated combat in this stub).
+				if (player == null
+						|| InventoryHelper.hasAny(player, "ad_astra:ostrum_ingot", "ad_astra:raw_ostrum")) {
+					gatherTask = null;
+					step = Step.RETURN;
+					break;
+				}
+				if (gatherTask == null || gatherTask.isFinished()) {
+					gatherTask = new GatherTask("ad_astra:ostrum_ingot", 4);
+					LOGGER.info("Mars dungeon: stockpiling ostrum loot via GatherTask");
+				}
+				if (ticks % 100 == 1) {
+					LOGGER.info("Mars dungeon: clear the dungeon and loot ostrum");
+				}
+				return gatherTask;
 			case RETURN:
 				LOGGER.info("Mars return gate complete (soft)");
 				step = Step.DONE;
@@ -62,10 +84,13 @@ public final class MarsDungeonSubtask extends Task {
 			case DONE:
 				break;
 		}
+		if (gatherTask != null && gatherTask.isFinished()) {
+			gatherTask = null;
+		}
 		return null;
 	}
 
-	private net.minecraft.server.network.ServerPlayerEntity firstPlayer() {
+	private ServerPlayerEntity firstPlayer() {
 		try {
 			var ctx = com.ezquest.astralclef.tasks.create.CreateRecipeExecutor.getInstance().getWorldContext();
 			if (ctx != null && ctx.isValid() && ctx.getWorld() != null && ctx.getWorld().getServer() != null) {
@@ -78,6 +103,7 @@ public final class MarsDungeonSubtask extends Task {
 
 	@Override
 	protected void onStop(Task interrupt) {
+		gatherTask = null;
 		LOGGER.debug("MarsDungeon stopped at {} (interrupt={})", step, interrupt);
 	}
 
