@@ -21,7 +21,7 @@ Runtime **requires Create** installed. Compile classpath includes Create via `bu
 | Phase | Focus | Status |
 |-------|--------|--------|
 | **Auto** | Full progression `ch01→moon→mars→mercury→singularity` | `FullProgressionTask` + `/astralclef auto` |
-| **Ch0.5–1** | Getting started (early Create + Astral basics) | Bindings + typed BE I/O + Create jobs |
+| **Ch0.5–1** | Getting started (early Create + Astral basics) | Bindings + typed BE I/O + Create jobs; gather/place unlock, material pre-gather, casing + grout gates |
 | Moon | Lunar progression | `ChMoonTask` `LAUNCH_PREP→LUNAR_SURFACE→MOON_DUNGEON` + `/astralclef moon` |
 | Mars | Martian progression | `ChMarsTask` `MARS_PREP→MARS_SURFACE→MARS_DUNGEON` + `/astralclef mars` |
 | Mercury | Mercurial progression | `ChMercuryTask` `MERCURY_PREP→MERCURY_SURFACE→MERCURY_VAULT` + `/astralclef mercury` |
@@ -69,14 +69,49 @@ Package `com.ezquest.astralclef.tasks.create.world`:
 | Pack-id confirm | **Hardened** — `Ch01RecipeBindings.confirmMatched` logs RecipeManager `ResourceLocation`; `/astralclef recipes` dumps Ch01 binds (type+IO bind retained) |
 | Create pin | `create-fabric-1.18.2:0.5.1-f-build.1415+mc1.18.2` |
 
-**Remaining gaps / soft (stabilize pass):**
+**Stabilize pass — done:**
 - Spout fluid via generic Transfer fallback (`tryInsertFluid`/`tryExtractFluid` no longer basin-gated; tank path stays basin-only) — basin Transfer still preferred for mixture
 - Basin filter **write** via `setBasinFilter` (FilteringBehaviour `setFilter`/field, best-effort; auto-applied before basin INSERT when expected output known)
 - Crafter **group** insert via `insertCrafterGroup` (3x3 crafters around locate pos, recipe-order distribute for BBB/AAA/CCC)
-- Exact pack-local KubeJS auto-ids still unresolved until datapack load (`Ch01RecipeIds` swap hooks; `refresh` on context set/auto-bind)
-- DepotBehaviour rename warns with class name when reflection misses
 - Furnace COMPOUND_SMELT polls `AbstractFurnaceBlockEntity` output/LIT instead of blind dwell; smithing table fails fast (no BE — needs player UI)
 - RPM floor `MIN_KINETIC_SPEED=32` with low-speed warn every 40 ticks (stress/network still not modeled beyond `getSpeed()`)
+- DepotBehaviour rename warns with class name when reflection misses
+
+**Still open by design:**
+- Exact pack-local KubeJS auto-ids resolve at datapack load (`Ch01RecipeIds` swap hooks; `refresh` on context set/auto-bind)
+
+#### Phase completion status
+
+- **Ch0.5 unlock** (`Ch05UnlockSubtask`) — gathers + places crafting table and furnace (idempotent nearby-block check), mines Fe/Sn/Cu, ensures andesite + clay essential mats
+- **Alloy/Casing** (`AlloyCasingSubtask`) — gathers andesite + zinc/iron nuggets up front, awaits bronze/compound/smelt jobs, gates casing on inventory or FTB `CH2_ANDESITE_CASING`
+- **Mixer loop** (`MixerLoopSubtask`) — fires kinetics/mill/press/mixer crafts, places hand crank or water wheel + mechanical press when items exist, awaits press-dust / compact / mixture jobs
+- **Moon/Mars/Mercury surface** — FTB dimension gate, then stockpile desh / ostrum / calorite via `GatherTask`
+- **Dungeon/vault clears** — gated on planet loot (desh / ostrum / calorite) or the matching FTB quest; otherwise stockpile + wait (no automated combat)
+- **Launch prep** (`LaunchPrepSubtask`) — oxygen gear → rocket (Create craft pipeline, else gather) → fuel → `ad_astra:launch_pad` nearby gate (`RocketHelper.hasLaunchPad`)
+- **Singularity** (`CraftSingularitySubtask`) — stockpiles desh/ostrum/calorite, fires the sequenced-assembly job, completes on `createastral:astral_singularity` in inventory or job finish
+- **Great Beast** (`GreatBeastPhase`) — paths to the nearest hostile (Baritone when present), swings via server-side `attack`, gates loot on the area going clear; soft-advances with a warning if nothing shows up (never stalls `/astralclef auto`)
+- **Structures** (`StructureLocator`) — direct 1.18.2 `ServerWorld.locateStructure(TagKey, ...)` path first, reflection fallbacks after; null-safe stub degrade
+- **Inventory** (`InventoryHelper`) — `#tag` checks resolve via `Registry.ITEM` entry lists (used by `#create:alloy_nuggets` and friends)
+
+#### Autonomy / embodiment (`bot` package, Altoclef-style)
+
+Server-side hands and feet — no Baritone required, works on dedicated servers:
+
+- `BotActions.breakBlock` — survival break via `interactionManager.tryBreakBlock` (real drops, tool wear, reach-checked, bedrock refused); auto-selects a suitable hotbar tool
+- `BotActions.eatIfHungry` — consumes one real food item for its `FoodComponent` values when hungry (honest economy, no free saturation)
+- `BotMovement.stepToward` — small direct teleports (always legal, no anti-cheat kick) landing only on verified standable columns (passable feet+head, solid ground, no fluids); fall distance zeroed
+- `GatherTask` mine loop — scan (with unbreakable/unreachable skip-list) → step into vacuum range (≤2.2 blocks, so drops land on the player) → break; Baritone `MineProcess` still preferred when present
+- `GreatBeastPhase` — server-side `attack` swings + area-clear loot gate
+- `BotCrafting` — crafts against the live `RecipeManager` (pack/KubeJS included) from real inventory: compound BBB/AAA/CCC rows tried in all orders, ingredients consumed, result + remainders given back; no screens, no conjured items
+- `BotSmelting.tickSmelt` — real placed-furnace smelting (input + fuel moved from the player, product pulled back, exact staging so the furnace frees up for the next metal); Ch0.5 smelts Cu/Sn/Fe to ingots, coal gathered as fuel
+- `BotActions.placeBlock` — survival click via `interactionManager.interactBlock` (support-face search, sneak so tables don't swallow the use); `BlockPlacementHelper` prefers it, direct set remains as fallback
+- `CreateRecipeJob` INSERT economy — takes stacks from the player first (`player inventory` in logs), seeds only the shortfall (`binding seed`); leftovers that don't fit are handed back, never voided
+- `CreateRecipeJob` EXTRACT delivery — item products are given to the player (jobs previously voided their own output); fluid outputs are verify-only, left in the basin for downstream use
+- Furnace jobs self-stoke: `COMPOUND_SMELT` INSERT pulls one fuel from the player (`BotSmelting.stokeFurnaceAt`), so the output poll can actually observe smelting
+- `GreatBeastPhase` kiting — backs off under 3 blocks, strafes in on alternating flanks, swings in reach; area-clear loot gate with soft timeout
+- Rocket assembly gates log NASA-workbench proximity (`RocketHelper.hasWorkbench`); slot-driving needs Ad Astra internals (not on the compile classpath — Create only, `transitive=false`)
+
+Not yet autonomous: multi-component rocket assembly, machine-blueprint building, Ad Astra rocket launch/entity ride, boss kiting. Smithing-table bronze still needs the player UI (no block entity to drive).
 
 ## Build
 
