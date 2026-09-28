@@ -1,0 +1,83 @@
+name: Bug report
+
+description: Something in Astralclef misbehaved, stalled, or crashed
+
+labels: [bug]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a report. Astralclef is still work in progress — see
+        [docs/roadmap.md](https://github.com/kaydzer0305-png/Astralclef/blob/main/docs/roadmap.md)
+        to check whether this is a known limitation before filing.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you run, and what did you expect instead?
+      placeholder: |
+        Ran /astralclef ch01, expected the alloy step to finish, but it sat on
+        AlloyCasing/BRONZE_SMITH forever.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      value: |
+        1. /astralclef context
+        2. /astralclef auto
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: status
+    attributes:
+      label: `/astralclef status` output
+      description: Paste this verbatim — it names the active phase and in-flight jobs.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: |
+        Loggers are namespaced `astralclef/...`, e.g. `astralclef/create-job`,
+        `astralclef/ftb`, `astralclef/moon/surface`. Only the lines around the
+        stall are needed.
+      render: text
+
+  - type: textarea
+    id: recipes
+    attributes:
+      label: `/astralclef recipes` output
+      description: |
+        Optional but very useful — an `<unresolved>` bind means the pack no
+        longer exposes that recipe.
+      render: text
+
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: "Astralclef, Create Fabric, and the Create: Astral pack version."
+      placeholder: "Astralclef 0.1.0 / Create 0.5.1-f-build.1415 / Astral 1.4"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Running on
+      options:
+        - Dedicated server
+        - Singleplayer client (with a LAN world)
+        - Both
+    validations:
+      required: true

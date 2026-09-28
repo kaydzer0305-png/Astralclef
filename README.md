@@ -1,158 +1,148 @@
+<div align="center">
+
 # Astralclef
 
-Phased automation bot for **Create: Astral** on Fabric 1.18.2.
+**A phased automation bot for the Create: Astral modpack on Fabric 1.18.2.**
 
-## Goal
+Play the modpack's questline hands-free: gather, craft, smelt, press, mix,
+compact, and fight — from first logs all the way to the Astral Singularity.
 
-Win condition: complete **FTB Quests Chapter 6 — Astral Singularity**.
+[![Build](https://github.com/kaydzer0305-png/Astralclef/actions/workflows/build.yml/badge.svg)](https://github.com/kaydzer0305-png/Astralclef/actions/workflows/build.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Minecraft 1.18.2](https://img.shields.io/badge/Minecraft-1.18.2-green.svg)
+![Fabric](https://img.shields.io/badge/Fabric-1.18.2-orange.svg)
 
-## Dependencies
+</div>
 
-| Dep | Version | Notes |
-|-----|---------|-------|
-| Minecraft / Fabric | 1.18.2 / Fabric API | Loom 1.0+
-| **Create Fabric** | `0.5.1-f-build.1415+mc1.18.2` | **Hard** `depends` in `fabric.mod.json` (`"create": "*"`). DevOS maven `com.simibubi.create:create-fabric-1.18.2`. Fallback: Modrinth / CurseMaven. |
-| Flywheel | JiJ inside Create (0.6.10-39) | Do not pin 0.6.4; transitive=false on Create jar keeps Astral-verified pin. |
+---
 
-Runtime **requires Create** installed. Compile classpath includes Create via `build.gradle`.
+> ### ⚠️ Status: work in progress
+>
+> The full progression chain **does not complete yet**. Several quest-gate and
+> automation paths are known-broken, so `/astralclef auto` will stall before
+> the Singularity. This is documented and prioritized rather than hidden —
+> see **[Known limitations](docs/roadmap.md)** for the current blocker list and
+> how to work around each one.
 
-## Phases
+## What it does
 
-| Phase | Focus | Status |
-|-------|--------|--------|
-| **Auto** | Full progression `ch01→moon→mars→mercury→singularity` | `FullProgressionTask` + `/astralclef auto` |
-| **Ch0.5–1** | Getting started (early Create + Astral basics) | Bindings + typed BE I/O + Create jobs; gather/place unlock, material pre-gather, casing + grout gates |
-| Moon | Lunar progression | `ChMoonTask` `LAUNCH_PREP→LUNAR_SURFACE→MOON_DUNGEON` + `/astralclef moon` |
-| Mars | Martian progression | `ChMarsTask` `MARS_PREP→MARS_SURFACE→MARS_DUNGEON` + `/astralclef mars` |
-| Mercury | Mercurial progression | `ChMercuryTask` `MERCURY_PREP→MERCURY_SURFACE→MERCURY_VAULT` + `/astralclef mercury` |
-| Singularity | Astral Singularity (Ch6 win) | `ChAstralSingularityTask` `GREAT_BEAST→CRAFT_SINGULARITY→QUEST_COMPLETION` + `/astralclef singularity`; `GreatBeastPhase` + `/astralclef beast` |
+Astralclef drives your player through the questline one **phase** at a time.
+Each phase breaks into subtasks, and each subtask issues **jobs** — locate a
+machine, insert real ingredients, wait for processing, extract the product.
 
-### Ch01 recipe bindings (`Ch01RecipeBindings`)
-
-Authoritative Astral item ids + `RecipeSpec` (type, inputs, output) with `astralclef:bind/*` placeholders.
-Resolve live datapack/KubeJS recipe ids via **RecipeManager type + I/O** (do not hard-depend on guessed `kubejs:` auto-ids).
-
-| Bind | Type | I/O (Astral kubejs) |
-|------|------|---------------------|
-| `astralclef:bind/bronze_smith` | `minecraft:smithing` | Cu + Sn → `createastral:bronze_ingot` |
-| `astralclef:bind/compound_shaped` | `minecraft:crafting_shaped` | 3 andesite / 3 zinc_nugget\|`#create:alloy_nuggets` / 3 clay → compound (BBB/AAA/CCC) |
-| `astralclef:bind/compound_smelt` | `minecraft:smelting` | compound → `create:andesite_alloy` |
-| `astralclef:bind/compound_blast` | `minecraft:blasting` | same (stock Create alloy recipes removed) |
-| `astralclef:bind/press_dust` | `create:pressing` | cobble → `techreborn:andesite_dust` |
-| `astralclef:bind/compact_andesite` | `create:compacting` | 4× dust → andesite |
-| `astralclef:bind/mixer_compound_mixture` | `create:mixing` | andesite+nugget+clay → `kubejs:compound_mixture` (**not** mixer→alloy) |
-| `astralclef:bind/grout` | `create:mixing` | alloy + zinc + 8 gravel → 8 `tconstruct:grout` |
-
-Items: bronze/sheet `createastral:*`; compound `createastral:andesite_compound`; alloy `create:andesite_alloy`; dust `techreborn:andesite_dust`; grout `tconstruct:grout`; fluid `kubejs:compound_mixture`.
-
-`CreateRecipeExecutor` seeds INSERT stacks from bindings; `KubeJsAwareCatalogue.shared()` / `ch01()` expose the catalogue.
-Swap opaque ids in `Ch01RecipeIds` (aliases to `Ch01RecipeBindings.BIND_*`) when Research lands exact JEI ids.
-
-### Create world locate + machine I/O
-
-Package `com.ezquest.astralclef.tasks.create.world`:
-
-- `CreateMachineType` — Kind → block ids (`create:basin`, `mechanical_press`, `mechanical_mixer`, `depot`, `belt`, `mechanical_crafter`, `spout`, `millstone`, `andesite_casing`, plus vanilla furnace/smith)
-- `CreateWorldContext` — ServerWorld + origin + searchRadius (default 16)
-- `CreateMachineLocator.locate` — cube scan; nearest matching block
-- `CreateMachineIO` — **typed Create BE** (`CreateBlockEntityIO`: Basin / Depot / Press / Mixer / Spout / Crafter via reflection) → Fabric Transfer → Inventory fallback
-- `CreateRecipeJob` — LOCATE → multi-INSERT (binding inputs) → PROCESS → EXTRACT (output filter)
-
-`CreateRecipeExecutor.tick(server)` auto-binds context from the first online player when jobs need it. Manual: `/astralclef context`.
-
-#### Ch01 harden status (`feat(create): harden Ch01 fluid+kinetic`)
-
-| Area | Status |
-|------|--------|
-| Basin fluid `kubejs:compound_mixture` | **Hardened** — `inputTank`/`outputTank` (SmartFluidTankBehaviour) + Fabric `Storage<FluidVariant>` / `fluidCapability` insert+extract |
-| Mixer/Press kinetic PROCESS | **Hardened** — watch `running`, `runningTicks`, `processingTicks`, `currentRecipe`, `getSpeed()`, `getBasin()`; wait start→complete or clear `failReason` timeout (no blind soft-complete) |
-| Pack-id confirm | **Hardened** — `Ch01RecipeBindings.confirmMatched` logs RecipeManager `ResourceLocation`; `/astralclef recipes` dumps Ch01 binds (type+IO bind retained) |
-| Create pin | `create-fabric-1.18.2:0.5.1-f-build.1415+mc1.18.2` |
-
-**Stabilize pass — done:**
-- Spout fluid via generic Transfer fallback (`tryInsertFluid`/`tryExtractFluid` no longer basin-gated; tank path stays basin-only) — basin Transfer still preferred for mixture
-- Basin filter **write** via `setBasinFilter` (FilteringBehaviour `setFilter`/field, best-effort; auto-applied before basin INSERT when expected output known)
-- Crafter **group** insert via `insertCrafterGroup` (3x3 crafters around locate pos, recipe-order distribute for BBB/AAA/CCC)
-- Furnace COMPOUND_SMELT polls `AbstractFurnaceBlockEntity` output/LIT instead of blind dwell; smithing table fails fast (no BE — needs player UI)
-- RPM floor `MIN_KINETIC_SPEED=32` with low-speed warn every 40 ticks (stress/network still not modeled beyond `getSpeed()`)
-- DepotBehaviour rename warns with class name when reflection misses
-
-**Still open by design:**
-- Exact pack-local KubeJS auto-ids resolve at datapack load (`Ch01RecipeIds` swap hooks; `refresh` on context set/auto-bind)
-
-#### Phase completion status
-
-- **Ch0.5 unlock** (`Ch05UnlockSubtask`) — gathers + places crafting table and furnace (idempotent nearby-block check), mines Fe/Sn/Cu, ensures andesite + clay essential mats
-- **Alloy/Casing** (`AlloyCasingSubtask`) — gathers andesite + zinc/iron nuggets up front, awaits bronze/compound/smelt jobs, gates casing on inventory or FTB `CH2_ANDESITE_CASING`
-- **Mixer loop** (`MixerLoopSubtask`) — fires kinetics/mill/press/mixer crafts, places hand crank or water wheel + mechanical press when items exist, awaits press-dust / compact / mixture jobs
-- **Moon/Mars/Mercury surface** — FTB dimension gate, then stockpile desh / ostrum / calorite via `GatherTask`
-- **Dungeon/vault clears** — gated on planet loot (desh / ostrum / calorite) or the matching FTB quest; otherwise stockpile + wait (no automated combat)
-- **Launch prep** (`LaunchPrepSubtask`) — oxygen gear → rocket (Create craft pipeline, else gather) → fuel → `ad_astra:launch_pad` nearby gate (`RocketHelper.hasLaunchPad`)
-- **Singularity** (`CraftSingularitySubtask`) — stockpiles desh/ostrum/calorite, fires the sequenced-assembly job, completes on `createastral:astral_singularity` in inventory or job finish
-- **Great Beast** (`GreatBeastPhase`) — paths to the nearest hostile (Baritone when present), swings via server-side `attack`, gates loot on the area going clear; soft-advances with a warning if nothing shows up (never stalls `/astralclef auto`)
-- **Structures** (`StructureLocator`) — direct 1.18.2 `ServerWorld.locateStructure(TagKey, ...)` path first, reflection fallbacks after; null-safe stub degrade
-- **Inventory** (`InventoryHelper`) — `#tag` checks resolve via `Registry.ITEM` entry lists (used by `#create:alloy_nuggets` and friends)
-
-#### Autonomy / embodiment (`bot` package, Altoclef-style)
-
-Server-side hands and feet — no Baritone required, works on dedicated servers:
-
-- `BotActions.breakBlock` — survival break via `interactionManager.tryBreakBlock` (real drops, tool wear, reach-checked, bedrock refused); auto-selects a suitable hotbar tool
-- `BotActions.eatIfHungry` — consumes one real food item for its `FoodComponent` values when hungry (honest economy, no free saturation)
-- `BotMovement.stepToward` — small direct teleports (always legal, no anti-cheat kick) landing only on verified standable columns (passable feet+head, solid ground, no fluids); fall distance zeroed
-- `GatherTask` mine loop — scan (with unbreakable/unreachable skip-list) → step into vacuum range (≤2.2 blocks, so drops land on the player) → break; Baritone `MineProcess` still preferred when present
-- `GreatBeastPhase` — server-side `attack` swings + area-clear loot gate
-- `BotCrafting` — crafts against the live `RecipeManager` (pack/KubeJS included) from real inventory: compound BBB/AAA/CCC rows tried in all orders, ingredients consumed, result + remainders given back; no screens, no conjured items
-- `BotSmelting.tickSmelt` — real placed-furnace smelting (input + fuel moved from the player, product pulled back, exact staging so the furnace frees up for the next metal); Ch0.5 smelts Cu/Sn/Fe to ingots, coal gathered as fuel
-- `BotActions.placeBlock` — survival click via `interactionManager.interactBlock` (support-face search, sneak so tables don't swallow the use); `BlockPlacementHelper` prefers it, direct set remains as fallback
-- `CreateRecipeJob` INSERT economy — takes stacks from the player first (`player inventory` in logs), seeds only the shortfall (`binding seed`); leftovers that don't fit are handed back, never voided
-- `CreateRecipeJob` EXTRACT delivery — item products are given to the player (jobs previously voided their own output); fluid outputs are verify-only, left in the basin for downstream use
-- Furnace jobs self-stoke: `COMPOUND_SMELT` INSERT pulls one fuel from the player (`BotSmelting.stokeFurnaceAt`), so the output poll can actually observe smelting
-- `GreatBeastPhase` kiting — backs off under 3 blocks, strafes in on alternating flanks, swings in reach; area-clear loot gate with soft timeout
-- Rocket assembly gates log NASA-workbench proximity (`RocketHelper.hasWorkbench`); slot-driving needs Ad Astra internals (not on the compile classpath — Create only, `transitive=false`)
-
-Not yet autonomous: multi-component rocket assembly, machine-blueprint building, Ad Astra rocket launch/entity ride, boss kiting. Smithing-table bronze still needs the player UI (no block entity to drive).
-
-## Build
-
-```bat
-set JAVA_HOME=C:\Program Files\Eclipse Adoptium\jdk-17.0.19.10-hotspot
-.\gradlew.bat build
+```
+/astralclef auto
+        │
+        ├── Ch0.5–1  Getting Started ── gather → craft → smelt → alloy → grout
+        ├── Moon     Launch Prep → Lunar Surface → Moon Dungeon
+        ├── Mars     Launch Prep → Mars Surface → Mars Dungeon
+        ├── Mercury  Launch Prep → Mercury Surface → Mercury Vault
+        └── Chapter 6  Great Beast → Craft Singularity → Quest Completion
 ```
 
-Requires JDK 17+. Create resolves from DevOS snapshots (`mvn.devos.one`). Gradle wrapper (`gradle-7.3.3`) is
-checked in via `gradle/wrapper/` + `gradlew.bat`. Loom 1.0.18 pins `create-fabric-1.18.2:0.5.1-f-build.1415+mc1.18.2`.
-Fabric Transfer 1.6.0 (1.18.2) iteration uses `storage.iterable(tx)` with an outer `Transaction`.
+## Key properties
 
-### Ch0.5–1 Create loop (ship order)
+| Property | What it means |
+|---|---|
+| **Honest economy** | Items come from real mining, real crafting against the live `RecipeManager`, and real placed furnaces. No conjured stacks in the `bot` package. |
+| **No Baritone required** | Movement, mining, placing, and combat run server-side, so it works on dedicated servers. Baritone is used opportunistically when present. |
+| **Pack-aware** | Recipes resolve from the live datapack/KubeJS recipe manager by type + I/O, so pack-local ids are discovered rather than hardcoded. |
+| **Soft dependencies** | FTB Quests, Baritone, Ad Astra, and Flywheel are all reached by reflection. Absent mods degrade instead of crashing. |
 
-`Ch01GettingStartedTask` via `TaskRunner` (`/astralclef ch01`):
+## Requirements
 
-1. **Ch0.5 unlock** — Crafting/Hephaestus or copper tools → Furnace → Fe/Sn/Cu → Essential Materials
-2. **Alloy / Casing** — Bronze smith → Compound shaped → Smelt/Blast → Alloy stockpile → Andesite Casing
-3. **Mixer loop** — Kinetics → Mill/Press/Mixer → press-dust → compact → early mixer mixture
-4. **Grout gate** — Grout via Mixer → Chapter 2 unlock
+| Dependency | Version | Notes |
+|---|---|---|
+| Minecraft | 1.18.2 | Fabric Loader `>=0.14.0`, Java 17+ |
+| Fabric API | `0.77.0+1.18.2` | Required. |
+| **Create (Fabric)** | `0.5.1-f-build.1415+mc1.18.2` | **Hard** dependency — `"create": "*"` in `fabric.mod.json`. Resolved from DevOS snapshots (`mvn.devos.one`). |
+| Flywheel | `0.6.10-39` | Ships JiJ inside Create. **Do not** pin `0.6.4`; the Astral-verified version is `0.6.10-39`. |
+| Create: Astral | — | The target modpack. |
 
-Subtasks fire `CreateRecipeKinds` with bind ids and wait for job completion.
+## Installation
+
+Astralclef is a client-agnostic, server-side Fabric mod.
+
+1. Build it, or grab the `.jar` from `build/libs/`.
+2. Drop `astralclef-<version>.jar` into the `mods/` folder of a **Fabric 1.18.2**
+   instance that already has **Create Fabric** and **Create: Astral** installed.
+3. Launch. Confirm with `/astralclef status`.
+
+Then set your base down and run:
+
+```
+/astralclef context     # bind the machine-search origin to your position
+/astralclef auto        # run the full progression chain
+```
+
+> `/astralclef context` is optional — the Create context auto-binds from the first
+> online player when a job needs it. Setting it manually just makes the search
+> radius predictable.
 
 ## Commands
 
-| Command | Action |
-|---------|--------|
-| `/astralclef auto` | Full auto `ch01→moon→mars→mercury→singularity` (`FullProgressionTask`) |
-| `/astralclef ch01` | Start Ch0.5–1 via TaskRunner |
-| `/astralclef moon` | Start Moon (`ChMoonTask`) |
-| `/astralclef mars` | Start Mars (`ChMarsTask`) |
-| `/astralclef mercury` | Start Mercury (`ChMercuryTask`) |
-| `/astralclef singularity` | Start Singularity Ch6 win (`ChAstralSingularityTask`) |
-| `/astralclef beast` | Start Great Beast (`GreatBeastPhase`) |
-| `/astralclef gather <item> [count]` | Gather via `GatherTask`+`BlockLocator` (Baritone soft) |
-| `/astralclef status` | Show active task + Create job/context summary |
-| `/astralclef context` | Bind locate origin to your world + block pos |
-| `/astralclef cancel` | Cancel active task |
-| `/astralclef tick` | Manual TaskRunner + Create executor tick |
-| `/astralclef recipes` | Dump Ch01 binds → resolved RecipeManager pack ids |
+| Command | Does |
+|---|---|
+| `/astralclef auto` | Full progression, Ch0.5–1 through Singularity |
+| `/astralclef ch01` | Getting Started phase only |
+| `/astralclef moon` | Moon phase |
+| `/astralclef mars` | Mars phase |
+| `/astralclef mercury` | Mercury phase |
+| `/astralclef singularity` | Chapter 6 — the win condition |
+| `/astralclef beast` | Great Beast combat on its own |
+| `/astralclef gather <item> [count]` | Mine toward an item; `count` is 1–640 |
+| `/astralclef status` | Active task, Create job summary, FTB/Baritone presence |
+| `/astralclef context` | Rebind the Create machine-search origin |
+| `/astralclef recipes` | Dump Ch01 binds against resolved pack recipe ids |
+| `/astralclef tick` | Force one TaskRunner + executor tick by hand |
+| `/astralclef cancel` | Stop the active task |
+
+Full reference with arguments and examples: **[docs/commands.md](docs/commands.md)**.
+
+## Building
+
+```bat
+set JAVA_HOME=C:\path\to\jdk-17
+.\gradlew.bat build
+```
+
+Requires **JDK 17** (`build.gradle` compiles with `options.release = 17`).
+The Gradle wrapper (`gradle-7.3.3`) is checked in, so no separate Gradle
+install is needed. The output jar lands in `build/libs/`.
+
+Create resolves from DevOS snapshots; first build downloads Minecraft assets and
+takes a few minutes.
+
+## Documentation
+
+| Document | What's in it |
+|---|---|
+| **[docs/architecture.md](docs/architecture.md)** | Package map, the Task → TaskRunner → CreateRecipeJob flow, and how machines are located and driven. |
+| **[docs/commands.md](docs/commands.md)** | Every `/astralclef` subcommand with arguments and examples. |
+| **[docs/create-recipes.md](docs/create-recipes.md)** | Ch01 recipe bindings, item ids, and the typed block-entity I/O layer. |
+| **[docs/roadmap.md](docs/roadmap.md)** | Known limitations, prioritized blockers, and unimplemented features. |
+
+## Project layout
+
+```
+src/main/java/com/ezquest/astralclef/
+├── AstralclefMod.java      entrypoint — wires TaskRunner + executor to server tick
+├── bot/                    embodiment: break, place, eat, move, craft, smelt
+├── combat/                 Great Beast kiting and swings
+├── command/                /astralclef brigadier registration
+├── inventory/              InventoryHelper — count/has, #tag resolution
+├── movement/               BaritoneHelper — optional, reflection-only
+├── quests/                 FTB Quests + quest-id tables (reflection-only)
+├── recipes/                Ch01 recipe bindings and the pack catalogue
+├── task/                   Task / TaskRunner — the tick-driven state machine
+├── tasks/
+│   ├── create/             CreateRecipeJob + executor
+│   │   └── world/          machine locate + typed block-entity I/O
+│   ├── gather/             GatherTask + BlockLocator
+│   └── phases/             ch01 / moon / mars / mercury / singularity subtasks
+└── world/                  structures, block placement, rocket + route helpers
+```
 
 ## License
 
-MIT — kaydzer0305-png
+[MIT](LICENSE) © kaydzer0305-png
