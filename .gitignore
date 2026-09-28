@@ -39,3 +39,6 @@ logs/
 *.log
 *.jar
 !gradle/wrapper/gradle-wrapper.jar
+
+# stale bootstrap snapshot of this project (the repo *is* the evolved scaffold)
+astralclef-scaffold.zip

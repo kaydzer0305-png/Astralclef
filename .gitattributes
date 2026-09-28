@@ -1,0 +1,13 @@
+# Normalize line endings in the repository, check out with platform defaults.
+# Without this, whether the working tree gets CRLF or LF depends on each
+# contributor's local core.autocrlf, which causes whole-file diff churn.
+* text=auto
+
+# Shell scripts must stay LF even on Windows checkouts.
+*.sh text eol=lf
+gradlew text eol=lf
+
+# Binary-ish assets.
+*.jar binary
+*.zip binary
+*.png binary
