@@ -48,6 +48,10 @@ processResources {
 
 tasks.withType(JavaCompile).configureEach {
 	it.options.release = 17
+	// Source files contain UTF-8 (arrows, dashes in javadoc). Without this,
+	// javac decodes them with the platform default charset, which mangles them
+	// or fails outright on non-UTF-8 Windows code pages.
+	it.options.encoding = 'UTF-8'
 }
 
 java {

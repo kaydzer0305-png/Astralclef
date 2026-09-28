@@ -49,7 +49,8 @@ public final class BlockLocator {
 					m.set(origin.getX() + dx, origin.getY() + dy, origin.getZ() + dz);
 					if (exclude != null && exclude.contains(m)) {
 						continue;
-					}var state = world.getBlockState(m);
+					}
+					var state = world.getBlockState(m);
 					Block b = state.getBlock();
 					if (!targets.contains(b)) {
 						continue;
